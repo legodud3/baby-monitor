@@ -13,6 +13,9 @@ const dimOverlay = document.getElementById('dim-overlay');
 const btnStop = document.getElementById('btn-stop');
 const audioVisualizer = document.getElementById('audio-visualizer');
 const btnListen = document.getElementById('btn-listen');
+const volumeControl = document.getElementById('volume-control');
+const volumeValueDisplay = document.getElementById('volume-value');
+const dbMeterFill = document.getElementById('db-level');
 const audioStatus = document.getElementById('audio-status');
 const vadStatus = document.getElementById('vad-status');
 const vadSensitivity = document.getElementById('vad-sensitivity');
@@ -28,6 +31,7 @@ let currentCall = null;
 let localStream = null;
 let wakeLock = null;
 let audioCtx = null;
+let gainNode = null;
 let analyser = null;
 let reconnectInterval = null;
 let vadInterval = null;
@@ -76,6 +80,9 @@ btnStop.addEventListener('click', stopSession);
 btnListen.addEventListener('click', resumeAudioContext);
 if(vadSensitivity) {
     vadSensitivity.addEventListener('input', updateSensitivityLabel);
+}
+if(volumeControl) {
+    volumeControl.addEventListener('input', updateVolumeLabel);
 }
 
 // Initialization
@@ -189,6 +196,14 @@ function updateSensitivityLabel() {
     else if (val > 70) label = 'High (Hears everything)';
     else label = 'Medium';
     vadValueDisplay.textContent = label;
+}
+
+function updateVolumeLabel() {
+    const val = volumeControl.value;
+    volumeValueDisplay.textContent = `${val}%`;
+    if (gainNode) {
+        gainNode.gain.setTargetAtTime(val / 100, audioCtx.currentTime, 0.05);
+    }
 }
 
 // PeerJS & Logic
@@ -435,9 +450,6 @@ function handleIncomingCall(call) {
 
 // Audio Handling
 function playAudio(stream) {
-    // We need a user gesture to play audio usually, handled by "Start Listening" button if needed
-    // But we'll try to auto-play and if it fails, show the button
-    
     const remoteAudio = document.getElementById('remote-audio');
     if (remoteAudio) {
         remoteAudio.srcObject = stream;
@@ -453,12 +465,21 @@ function playAudio(stream) {
     }
 
     const source = audioCtx.createMediaStreamSource(stream);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 32;
     
+    // Setup Analyser
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256; // Better resolution for DB meter
+    
+    // Setup Gain Node for amplification
+    gainNode = audioCtx.createGain();
+    const initialVolume = volumeControl ? parseInt(volumeControl.value) : 100;
+    gainNode.gain.setValueAtTime(initialVolume / 100, audioCtx.currentTime);
+    
+    // Routing: source -> analyser -> gainNode -> destination
+    // This way analyser shows input level even if gain is low
     source.connect(analyser);
-    // source -> analyser -> destination
-    analyser.connect(audioCtx.destination);
+    analyser.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
 
     visualize();
 
@@ -466,7 +487,6 @@ function playAudio(stream) {
         audioStatus.textContent = "Tap 'Start Listening' to hear audio";
         btnListen.style.display = 'block';
     } else {
-        // If it's already running, hide the button
         if (remoteAudio && !remoteAudio.paused) {
             btnListen.style.display = 'none';
         }
@@ -504,18 +524,39 @@ function visualize() {
         requestAnimationFrame(draw);
         analyser.getByteFrequencyData(dataArray);
 
-        // Simple visualizer: map a few frequency bands to bars
-        // We have 5 bars. 
-        // Let's just take an average or specific indices.
-        // fftSize 32 -> 16 bins.
+        // Calculate Average for DB Meter
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+        }
+        const average = sum / bufferLength;
         
-        for (let i = 0; i < 5; i++) {
-            const val = dataArray[i * 2]; // simple sampling
-            const height = Math.max(5, (val / 255) * 100);
+        // Map average to percentage (0-255 -> 0-100%)
+        // Let's use a non-linear mapping for better "decibel meter" feel
+        // 0-255 range. Speaking is usually around 100-150.
+        const levelPercent = Math.min(100, (average / 150) * 100);
+        if (dbMeterFill) {
+            dbMeterFill.style.width = `${levelPercent}%`;
+            
+            // Color feedback on meter
+            if (levelPercent > 85) dbMeterFill.style.backgroundColor = '#ff5252';
+            else if (levelPercent > 60) dbMeterFill.style.backgroundColor = '#ffcc00';
+            else dbMeterFill.style.backgroundColor = '#69f0ae';
+        }
+
+        // Small bar visualizer
+        for (let i = 0; i < bars.length; i++) {
+            // Sample a range of frequencies
+            const startIdx = Math.floor(i * (bufferLength / bars.length));
+            let maxVal = 0;
+            for(let j=0; j < (bufferLength/bars.length); j++) {
+                if(dataArray[startIdx + j] > maxVal) maxVal = dataArray[startIdx + j];
+            }
+            
+            const height = Math.max(5, (maxVal / 255) * 100);
             bars[i].style.height = `${height}%`;
             
-            // Color indication for loudness
-            if (val > 200) {
+            if (maxVal > 200) {
                 bars[i].style.backgroundColor = '#ff5252';
             } else {
                 bars[i].style.backgroundColor = '#64ffda';
@@ -531,6 +572,9 @@ function stopVisualizer() {
         bar.style.height = '5px';
         bar.style.backgroundColor = '#64ffda';
     });
+    if (dbMeterFill) {
+        dbMeterFill.style.width = '0%';
+    }
 }
 
 function updateStatus(isConnected, type = 'server') {
