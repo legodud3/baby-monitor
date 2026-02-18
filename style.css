@@ -176,13 +176,15 @@ header {
     left: 0;
     width: 100vw;
     height: 100vh;
-    background-color: black;
-    opacity: 0.95;
-    z-index: 999;
+    background-color: #000000;
+    opacity: 0.98;
+    z-index: 9999;
     display: flex;
     justify-content: center;
     align-items: center;
-    color: #333;
+    color: #444; /* Subtle text */
+    pointer-events: auto; /* Ensure taps register */
+    touch-action: manipulation;
 }
 
 /* VAD Controls */

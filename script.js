@@ -17,6 +17,7 @@ const audioStatus = document.getElementById('audio-status');
 const vadStatus = document.getElementById('vad-status');
 const vadSensitivity = document.getElementById('vad-sensitivity');
 const vadValueDisplay = document.getElementById('vad-value');
+const wakeLockVideo = document.getElementById('wake-lock-video');
 
 // State
 let role = null;
@@ -42,7 +43,17 @@ const VAD_HOLD_TIME = 2000; // ms to keep mic open after noise stops
 btnChild.addEventListener('click', () => startSession('child'));
 btnParent.addEventListener('click', () => startSession('parent'));
 btnDim.addEventListener('click', toggleDim);
-dimOverlay.addEventListener('click', toggleDim);
+// Double-tap logic for dim overlay
+let lastTap = 0;
+dimOverlay.addEventListener('click', (e) => {
+    const currentTime = new Date().getTime();
+    const tapLength = currentTime - lastTap;
+    if (tapLength < 500 && tapLength > 0) {
+        toggleDim();
+        e.preventDefault();
+    }
+    lastTap = currentTime;
+});
 btnStop.addEventListener('click', stopSession);
 btnListen.addEventListener('click', resumeAudioContext);
 if(vadSensitivity) {
@@ -50,11 +61,19 @@ if(vadSensitivity) {
 }
 
 // Initialization
-function startSession(selectedRole) {
+async function startSession(selectedRole) {
     const roomName = roomIdInput.value.trim();
     if (!roomName) {
         alert('Please enter a Room Name');
         return;
+    }
+
+    // IOS WAKE LOCK HACK: Play hidden video immediately
+    try {
+        await wakeLockVideo.play();
+        console.log('Video Wake Lock Active');
+    } catch (err) {
+        console.warn('Video Wake Lock Failed (Auto-play blocked?):', err);
     }
 
     role = selectedRole;
@@ -104,6 +123,32 @@ async function requestWakeLock() {
 
 function toggleDim() {
     dimOverlay.classList.toggle('hidden');
+    if (!dimOverlay.classList.contains('hidden')) {
+        dimOverlay.innerHTML = '<p>Long press to wake</p>';
+    }
+}
+
+// Long Press Logic
+let pressTimer;
+dimOverlay.addEventListener('mousedown', startPress);
+dimOverlay.addEventListener('touchstart', startPress);
+dimOverlay.addEventListener('mouseup', cancelPress);
+dimOverlay.addEventListener('touchend', cancelPress);
+dimOverlay.addEventListener('mouseleave', cancelPress);
+
+function startPress(e) {
+    // e.preventDefault(); // Prevents ghost clicks
+    dimOverlay.innerHTML = '<p style="color: #69f0ae">Keep holding...</p>';
+    pressTimer = setTimeout(() => {
+        toggleDim();
+    }, 1500);
+}
+
+function cancelPress() {
+    clearTimeout(pressTimer);
+    if (!dimOverlay.classList.contains('hidden')) {
+        dimOverlay.innerHTML = '<p>Long press to wake</p>';
+    }
 }
 
 function updateSensitivityLabel() {

@@ -76,8 +76,13 @@
         
         <!-- Dim Overlay for Child Unit -->
         <div id="dim-overlay" class="hidden">
-            <p>Tap to wake</p>
+            <p>Double-tap to wake</p>
         </div>
+        
+        <!-- IOS WAKE LOCK HACK: Hidden video loop to keep browser/network active -->
+        <video id="wake-lock-video" playsinline loop muted width="1" height="1" style="opacity: 0; pointer-events: none; position: absolute;">
+            <source src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAC5tZGF0DQoAAAAADGdmZDL3AgAAAAAAB5ZtZnJhAAAAAAAAAAH3bWZoZAAAAAB3d3d3AAAAAAA=" type="video/mp4">
+        </video>
     </div>
     
     <script src="script.js"></script>
