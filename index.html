@@ -58,15 +58,32 @@
                 <!-- Parent View Elements -->
                 <div id="parent-controls" class="hidden">
                     <div class="visualizer-container">
-                        <div id="audio-visualizer">
-                            <div class="bar"></div>
-                            <div class="bar"></div>
-                            <div class="bar"></div>
-                            <div class="bar"></div>
-                            <div class="bar"></div>
+                        <div id="db-meter" class="meter-background">
+                            <div id="db-level" class="meter-fill"></div>
+                            <div class="meter-labels">
+                                <span>-60dB</span>
+                                <span>-30dB</span>
+                                <span>-10dB</span>
+                                <span>0dB</span>
+                            </div>
                         </div>
                     </div>
-                    <audio id="remote-audio" autoplay playsinline style="display:none;"></audio>
+                    
+                    <div id="audio-visualizer">
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="volume-control">Speaker Boost: <span id="volume-value">100%</span></label>
+                        <input type="range" id="volume-control" min="0" max="400" value="100">
+                        <p class="hint">Boost up to 400% if baby is faint.</p>
+                    </div>
+
+                    <audio id="remote-audio" autoplay playsinline style="display:none;" muted></audio>
                     <button id="btn-listen" class="btn-primary">Start Listening</button>
                     <div id="audio-status">Waiting for audio...</div>
                 </div>
