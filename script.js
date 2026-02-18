@@ -43,10 +43,17 @@ const VAD_HOLD_TIME = 2000; // ms to keep mic open after noise stops
 
 // Utility
 function log(msg, isError = false) {
-    console.log(msg);
+    const time = new Date().toLocaleTimeString();
+    const fullMsg = `[${time}] ${msg}`;
+    console.log(fullMsg);
     if (debugLog) {
-        debugLog.textContent = msg;
-        debugLog.style.color = isError ? '#ff5252' : '#69f0ae';
+        const p = document.createElement('div');
+        p.textContent = fullMsg;
+        p.style.color = isError ? '#ff5252' : '#69f0ae';
+        p.style.borderBottom = '1px solid #333';
+        p.style.padding = '2px 0';
+        debugLog.appendChild(p);
+        debugLog.scrollTop = debugLog.scrollHeight;
     }
 }
 
@@ -73,42 +80,50 @@ if(vadSensitivity) {
 
 // Initialization
 async function startSession(selectedRole) {
-    const roomName = roomIdInput.value.trim();
-    if (!roomName) {
-        alert('Please enter a Room Name');
-        return;
-    }
-
-    log("Initializing...", false);
-
-    // IOS WAKE LOCK HACK: Play hidden video immediately
     try {
-        await wakeLockVideo.play();
-        console.log('Video Wake Lock Active');
-    } catch (err) {
-        console.warn('Video Wake Lock Failed (Auto-play blocked?):', err);
-    }
+        const roomName = roomIdInput.value.trim();
+        if (!roomName) {
+            alert('Please enter a Room Name');
+            return;
+        }
 
-    role = selectedRole;
-    roomId = roomName.toLowerCase().replace(/[^a-z0-9]/g, ''); // Sanitize
-    
-    // Check if ID is empty after sanitize
-    if (!roomId) {
-        log("Invalid Room Name. Use letters/numbers only.", true);
-        return;
-    }
-    
-    // UI Update - Delayed slightly to allow init to start
-    // landingScreen.classList.add('hidden'); // Moved to successful connection
-    // monitorScreen.classList.remove('hidden');
-    
-    if (role === 'child') {
-        initChild();
-    } else {
-        initParent();
-    }
+        debugLog.innerHTML = ''; // Clear previous logs
+        log("Initializing...", false);
 
-    requestWakeLock();
+        // Check if PeerJS loaded
+        if (typeof Peer === 'undefined') {
+            log("Error: PeerJS library not loaded. Check Internet connection.", true);
+            return;
+        }
+
+        // IOS WAKE LOCK HACK: Play hidden video (Non-blocking)
+        wakeLockVideo.play().then(() => {
+            console.log('Video Wake Lock Active');
+        }).catch((err) => {
+            console.warn('Video Wake Lock Failed:', err);
+            // This is non-critical, so we don't stop
+        });
+
+        role = selectedRole;
+        roomId = roomName.toLowerCase().replace(/[^a-z0-9]/g, ''); // Sanitize
+        
+        // Check if ID is empty after sanitize
+        if (!roomId) {
+            log("Invalid Room Name. Use letters/numbers only.", true);
+            return;
+        }
+        
+        if (role === 'child') {
+            initChild();
+        } else {
+            initParent();
+        }
+
+        requestWakeLock();
+    } catch (e) {
+        console.error(e);
+        log(`App Error: ${e.message}`, true);
+    }
 }
 
 function switchToMonitor() {
@@ -138,13 +153,16 @@ async function requestWakeLock() {
     if ('wakeLock' in navigator) {
         try {
             wakeLock = await navigator.wakeLock.request('screen');
-            console.log('Wake Lock active');
+            log('Screen Wake Lock active', false);
             wakeLock.addEventListener('release', () => {
-                console.log('Wake Lock released');
+                log('Screen Wake Lock released', true);
             });
         } catch (err) {
             console.error(`${err.name}, ${err.message}`);
+            log(`WakeLock Error: ${err.message}`, true);
         }
+    } else {
+        log('WakeLock API not supported', true);
     }
 }
 
@@ -174,13 +192,13 @@ let childRetryInterval = null;
 
 function initChild() {
     const myId = `babymonitor-${roomId}-child`;
-    log(`Connecting as Sender (${myId})...`);
+    log(`Creating Peer: ${myId}...`);
     
     if (peer) peer.destroy();
     peer = new Peer(myId, PEER_CONFIG);
 
     peer.on('open', (id) => {
-        log('Connected to Server', false);
+        log('Peer Open. ID: ' + id, false);
         switchToMonitor();
         updateStatus(true); // Connected to signaling server
         startStreaming();
@@ -189,7 +207,7 @@ function initChild() {
     peer.on('error', (err) => {
         console.error('Peer Error:', err.type, err);
         if (err.type === 'unavailable-id') {
-            log(`Room '${roomId}' taken.`, true);
+            log(`ID '${roomId}' taken.`, true);
             alert('Room Name Taken. Please choose another.');
             stopSession();
         } else if (err.type === 'peer-unavailable') {
@@ -199,7 +217,7 @@ function initChild() {
         } else if (err.type === 'network') {
             log('Network Error.', true);
         } else {
-            log(`Error: ${err.type}`, true);
+            log(`Peer Error: ${err.type}`, true);
             updateStatus(false);
             // General error, retry initialization
             setTimeout(initChild, 5000);
@@ -207,7 +225,7 @@ function initChild() {
     });
 
     peer.on('disconnected', () => {
-        log('Disconnected. Reconnecting...', true);
+        log('Disconnected from Server. Reconnecting...', true);
         updateStatus(false);
         peer.reconnect();
     });
@@ -225,7 +243,7 @@ async function startStreaming() {
                 },
                 video: false
             });
-            log("Mic Active", false);
+            log(`Mic Active. Tracks: ${localStream.getTracks().length}`, false);
         }
         
         setupVAD(localStream);
@@ -302,24 +320,21 @@ function connectToParent() {
     }
 
     const targetId = `babymonitor-${roomId}-parent`;
-    log(`Calling Parent...`, false);
+    log(`Calling Parent (${targetId})...`, false);
     
     const call = peer.call(targetId, localStream);
     currentCall = call;
 
     call.on('close', () => {
-        log('Call lost. Retrying...', true);
+        log('Call lost/closed. Retrying...', true);
         retryConnection();
     });
 
     call.on('error', (err) => {
         console.error('Call error:', err);
+        log(`Call Error: ${err.type}`, true);
         retryConnection();
     });
-    
-    // If connection is established, we might not get a specific event on the sender side easily 
-    // without a data channel, but if we don't get an error, we assume it's trying.
-    // If 'peer-unavailable' fires on the PEER object, it means this call failed.
 }
 
 function retryConnection() {
@@ -334,32 +349,32 @@ function retryConnection() {
 // --- PARENT LOGIC ---
 function initParent() {
     const myId = `babymonitor-${roomId}-parent`;
-    log(`Connecting as Receiver (${myId})...`);
+    log(`Creating Peer: ${myId}...`);
     
     if (peer) peer.destroy();
     peer = new Peer(myId, PEER_CONFIG);
 
     peer.on('open', (id) => {
-        log('Connected. Waiting for Child...', false);
+        log('Peer Open. Waiting for Child...', false);
         switchToMonitor();
         updateStatus(true); 
         audioStatus.textContent = "Waiting for Child unit...";
     });
 
     peer.on('call', (call) => {
-        log(`Call received!`, false);
-        call.answer(); // Answer automatically
+        log(`Incoming Call from ${call.peer}`, false);
+        call.answer(); 
         handleIncomingCall(call);
     });
     
     peer.on('error', (err) => {
         console.error(err);
         if (err.type === 'unavailable-id') {
-             log(`Room '${roomId}' taken.`, true);
+             log(`ID '${roomId}' taken.`, true);
              alert('Room Name Taken.');
              stopSession();
         } else {
-            log(`Error: ${err.type}`, true);
+            log(`Peer Error: ${err.type}`, true);
             updateStatus(false);
         }
     });
