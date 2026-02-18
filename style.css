@@ -1,0 +1,231 @@
+:root {
+    --bg-color: #121212;
+    --text-color: #e0e0e0;
+    --primary-color: #64ffda;
+    --secondary-color: #333;
+    --accent-red: #ff5252;
+    --accent-green: #69f0ae;
+    --card-bg: #1e1e1e;
+    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: var(--font-family);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#app {
+    width: 100%;
+    max-width: 480px;
+    padding: 20px;
+    text-align: center;
+}
+
+/* Landing Screen */
+#landing-screen {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+h1 {
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--primary-color);
+}
+
+.role-selection {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+}
+
+.btn-large {
+    background-color: var(--card-bg);
+    border: 2px solid var(--secondary-color);
+    border-radius: 12px;
+    padding: 20px;
+    color: var(--text-color);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    transition: transform 0.1s, border-color 0.2s;
+}
+
+.btn-large:active, .btn-large:focus {
+    transform: scale(0.98);
+    border-color: var(--primary-color);
+    outline: none;
+}
+
+.icon {
+    font-size: 2rem;
+}
+
+/* Inputs */
+.room-input-container {
+    margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+}
+
+label {
+    font-size: 0.9rem;
+    color: #aaa;
+}
+
+input[type="text"] {
+    background-color: var(--card-bg);
+    border: 1px solid var(--secondary-color);
+    padding: 15px;
+    border-radius: 8px;
+    color: var(--text-color);
+    font-size: 1.2rem;
+    width: 100%;
+}
+
+input:focus {
+    border-color: var(--primary-color);
+    outline: none;
+}
+
+.hint {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Monitor Screen */
+#monitor-screen {
+    display: flex;
+    flex-direction: column;
+    height: 90vh;
+    justify-content: space-between;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: var(--secondary-color);
+}
+
+.connected { background-color: var(--accent-green); box-shadow: 0 0 10px var(--accent-green); }
+.disconnected { background-color: var(--accent-red); }
+
+/* Buttons */
+.btn-primary, .btn-secondary, .btn-danger {
+    padding: 15px 30px;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 10px;
+}
+
+.btn-primary { background-color: var(--primary-color); color: #000; }
+.btn-secondary { background-color: var(--secondary-color); color: var(--text-color); }
+.btn-danger { background-color: transparent; border: 1px solid var(--accent-red); color: var(--accent-red); }
+
+/* Visualizer */
+.visualizer-container {
+    height: 150px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 5px;
+    margin: 20px 0;
+}
+
+.bar {
+    width: 15px;
+    background-color: var(--primary-color);
+    height: 5px;
+    border-radius: 3px;
+    transition: height 0.1s ease;
+}
+
+/* Dim Overlay */
+#dim-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: black;
+    opacity: 0.95;
+    z-index: 999;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #333;
+}
+
+/* VAD Controls */
+.control-group {
+    background-color: var(--card-bg);
+    padding: 15px;
+    border-radius: 8px;
+    margin: 15px 0;
+    text-align: left;
+}
+
+.status-message {
+    font-size: 1.2rem;
+    font-weight: bold;
+    margin-bottom: 20px;
+    min-height: 1.5em;
+    color: var(--accent-green);
+    transition: color 0.3s;
+}
+
+input[type=range] {
+    width: 100%;
+    margin: 10px 0;
+    background: transparent;
+    -webkit-appearance: none;
+}
+
+input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 20px;
+    width: 20px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    cursor: pointer;
+    margin-top: -8px; 
+}
+
+input[type=range]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: var(--secondary-color);
+    border-radius: 2px;
+}
+
+.hidden { display: none !important; }

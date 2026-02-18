@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BabyListen - Secure Audio Monitor</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- PeerJS CDN -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Landing Screen: Role Selection -->
+        <div id="landing-screen" class="screen">
+            <h1>BabyListen</h1>
+            <p>Select your device role</p>
+            
+            <div class="role-selection">
+                <button id="btn-child" class="btn-large">
+                    <span class="icon">👶</span>
+                    Child Unit (Sender)
+                </button>
+                <button id="btn-parent" class="btn-large">
+                    <span class="icon">👂</span>
+                    Parent Unit (Receiver)
+                </button>
+            </div>
+
+            <div class="room-input-container">
+                <label for="room-id">Room Name</label>
+                <input type="text" id="room-id" placeholder="e.g. cabin123" autocapitalize="none">
+                <p class="hint">Enter the same room name on both devices.</p>
+            </div>
+        </div>
+
+        <!-- Monitor Screen: Active Session -->
+        <div id="monitor-screen" class="screen hidden">
+            <header>
+                <h2 id="role-display">Role</h2>
+                <div id="connection-status" class="status-indicator disconnected"></div>
+            </header>
+
+            <main>
+                <!-- Child View Elements -->
+                <div id="child-controls" class="hidden">
+                    <div id="vad-status" class="status-message">Microphone Active</div>
+                    
+                    <div class="control-group">
+                        <label for="vad-sensitivity">Sensitivity: <span id="vad-value">Medium</span></label>
+                        <input type="range" id="vad-sensitivity" min="0" max="100" value="50">
+                    </div>
+
+                    <button id="btn-dim" class="btn-secondary">Dim Screen (Save Battery)</button>
+                </div>
+
+                <!-- Parent View Elements -->
+                <div id="parent-controls" class="hidden">
+                    <div class="visualizer-container">
+                        <div id="audio-visualizer">
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                        </div>
+                    </div>
+                    <button id="btn-listen" class="btn-primary">Start Listening</button>
+                    <div id="audio-status">Waiting for audio...</div>
+                </div>
+            </main>
+
+            <footer>
+                <button id="btn-stop" class="btn-danger">Stop & Exit</button>
+            </footer>
+        </div>
+        
+        <!-- Dim Overlay for Child Unit -->
+        <div id="dim-overlay" class="hidden">
+            <p>Tap to wake</p>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
