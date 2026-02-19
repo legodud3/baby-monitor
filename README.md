@@ -11,14 +11,15 @@ A secure, zero-latency audio monitor that works over your local network using We
     - **Child Unit**: Noise suppression and auto-gain (hears whispers, ignores fans).
     - **Parent Unit**: Visual audio meter to see noise even when muted.
 - **Parent-Only Controls**: Mode (Transparency/Minimal), Mic Boost, and Dim Child Screen.
-- **Last Cry Indicator**: Parent shows “Last cry” based on sustained noise detection (this feature is WIP).
+- **Last Cry Indicator**: Parent shows “Last cry” based on sustained noise detection (This feature is WIP).
 - **Loud Alert Output**: Parent audio is amplified for alerting (fidelity tradeoff).
 - **Reliability**: Auto-reconnection if Wi-Fi drops.
 
 ## How to Use
 
 1. **Open the App**: 
-   - Host it on GitHub Pages or open `index.html` locally.
+   - Open legodud3.github.io/kgbaby on both the child & parent device browsers
+   - You may also host it yourself on GitHub Pages by cloning the repo or open `index.html` locally.
    - **HTTPS is required** for microphone access (unless on `localhost`).
 
 2. **Select Role**:
