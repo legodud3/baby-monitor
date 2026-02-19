@@ -57,12 +57,7 @@
                         </div>
                     </div>
                     
-                    <div class="control-group">
-                        <label for="vad-sensitivity">Sensitivity: <span id="vad-value">Medium</span></label>
-                        <input type="range" id="vad-sensitivity" min="0" max="100" value="50">
-                    </div>
-
-                    <button id="btn-dim" class="btn-secondary">Dim Screen (Save Battery)</button>
+                    <div class="hint">Controls are on the Parent unit.</div>
                 </div>
 
                 <!-- Parent View Elements -->
@@ -74,10 +69,22 @@
                     </div>
                     
                     <div class="control-group">
-                        <label for="volume-control">Speaker Boost: <span id="volume-value">100%</span></label>
-                        <input type="range" id="volume-control" min="0" max="400" value="100">
-                        <p class="hint">Boost up to 400% if baby is faint.</p>
+                        <label>Mode</label>
+                        <div class="segmented">
+                            <button id="mode-transparency" class="seg-btn active" type="button">Transparency</button>
+                            <button id="mode-minimal" class="seg-btn" type="button">Minimal</button>
+                        </div>
                     </div>
+
+                    <div class="control-group">
+                        <label>Mic Boost</label>
+                        <div class="segmented">
+                            <button id="mic-boost-off" class="seg-btn active" type="button">Off</button>
+                            <button id="mic-boost-on" class="seg-btn" type="button">On</button>
+                        </div>
+                    </div>
+
+                    <button id="btn-dim-parent" class="btn-secondary" type="button">Dim Child Screen</button>
 
                     <audio id="remote-audio" autoplay playsinline style="display:none;" muted></audio>
                     <button id="btn-listen" class="btn-primary">Start Listening</button>
@@ -102,6 +109,7 @@
     </div>
     
     <script src="cry-config.js"></script>
+    <script src="network-config.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

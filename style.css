@@ -110,6 +110,29 @@ input:focus {
     color: #666;
 }
 
+.segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.seg-btn {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--secondary-color);
+    background: var(--card-bg);
+    color: var(--text-color);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.seg-btn.active {
+    border-color: var(--primary-color);
+    color: #000;
+    background: var(--primary-color);
+}
+
 /* Monitor Screen */
 #monitor-screen {
     display: flex;
@@ -254,6 +277,34 @@ input[type=range]::-webkit-slider-runnable-track {
     display: flex;
     flex-direction: column;
     gap: 18px;
+}
+
+@media (max-height: 700px) {
+    #monitor-screen {
+        height: 100vh;
+    }
+
+    header {
+        margin-bottom: 12px;
+    }
+
+    #child-controls,
+    #parent-controls {
+        gap: 12px;
+    }
+
+    .visualizer-container {
+        margin: 8px 0 12px;
+    }
+
+    .control-group {
+        margin: 12px 0;
+        padding: 12px;
+    }
+
+    .btn-primary, .btn-secondary, .btn-danger {
+        padding: 12px 20px;
+    }
 }
 
 /* Debug Panel */

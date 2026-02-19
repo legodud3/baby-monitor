@@ -8,19 +8,19 @@ const roleDisplay = document.getElementById('role-display');
 const statusIndicator = document.getElementById('connection-status');
 const childControls = document.getElementById('child-controls');
 const parentControls = document.getElementById('parent-controls');
-const btnDim = document.getElementById('btn-dim');
 const dimOverlay = document.getElementById('dim-overlay');
 const btnStop = document.getElementById('btn-stop');
 const btnListen = document.getElementById('btn-listen');
-const volumeControl = document.getElementById('volume-control');
-const volumeValueDisplay = document.getElementById('volume-value');
 const audioStatus = document.getElementById('audio-status');
 const vadStatus = document.getElementById('vad-status');
-const vadSensitivity = document.getElementById('vad-sensitivity');
-const vadValueDisplay = document.getElementById('vad-value');
 const wakeLockVideo = document.getElementById('wake-lock-video');
 const debugLog = document.getElementById('debug-log');
 const lastCryEl = document.getElementById('last-cry');
+const modeTransparencyBtn = document.getElementById('mode-transparency');
+const modeMinimalBtn = document.getElementById('mode-minimal');
+const micBoostOffBtn = document.getElementById('mic-boost-off');
+const micBoostOnBtn = document.getElementById('mic-boost-on');
+const btnDimParent = document.getElementById('btn-dim-parent');
 
 // State
 let role = null;
@@ -57,13 +57,27 @@ let cryStartTs = null;
 let cryCooldownUntil = 0;
 let noiseFloorDb = null;
 let lastVadSampleTs = null;
+let lastVisualizerPrefix = null;
+let sendStream = null;
+let sendTrack = null;
+let micGainNode = null;
+let micBoostEnabled = false;
+let childMode = 'transparency';
+let gateStartTs = null;
+let isDimmed = false;
 
 // Constants
 const MAX_LOG_ENTRIES = 200;
 const STATS_INTERVAL_MS = 2500;
 const SILENCE_WARN_MS = 12000;
-const BITRATE_LEVELS = [32000, 48000, 64000];
-const BITRATE_DEFAULT_INDEX = 2;
+const NETWORK_CONFIG = Object.assign({
+    lowBandwidth: false,
+    bitrateLevelsKbps: [32, 48, 64],
+    lowBandwidthLevelsKbps: [12, 24, 48]
+}, window.NETWORK_CONFIG || {});
+const BITRATE_LEVELS = (NETWORK_CONFIG.lowBandwidth ? NETWORK_CONFIG.lowBandwidthLevelsKbps : NETWORK_CONFIG.bitrateLevelsKbps)
+    .map(kbps => Math.max(8, kbps) * 1000);
+const BITRATE_DEFAULT_INDEX = Math.min(2, BITRATE_LEVELS.length - 1);
 const BITRATE_STEP_DOWN_AFTER = 3; // consecutive bad intervals
 const BITRATE_STEP_UP_AFTER = 4; // consecutive good intervals
 
@@ -110,26 +124,26 @@ function log(msg, isError = false) {
 // Event Listeners
 btnChild.addEventListener('click', () => startSession('child'));
 btnParent.addEventListener('click', () => startSession('parent'));
-btnDim.addEventListener('click', toggleDim);
-// Double-tap logic for dim overlay
-let lastTap = 0;
-dimOverlay.addEventListener('click', (e) => {
-    const currentTime = new Date().getTime();
-    const tapLength = currentTime - lastTap;
-    if (tapLength < 500 && tapLength > 0) {
-        toggleDim();
-        e.preventDefault();
-    }
-    lastTap = currentTime;
-});
 btnStop.addEventListener('click', stopSession);
 btnListen.addEventListener('click', resumeAudioContext);
-if(vadSensitivity) {
-    vadSensitivity.addEventListener('input', updateSensitivityLabel);
-}
-if(volumeControl) {
-    volumeControl.addEventListener('input', updateVolumeLabel);
-}
+if (modeTransparencyBtn) modeTransparencyBtn.addEventListener('click', () => setParentMode('transparency'));
+if (modeMinimalBtn) modeMinimalBtn.addEventListener('click', () => setParentMode('minimal'));
+if (micBoostOffBtn) micBoostOffBtn.addEventListener('click', () => setParentMicBoost(false));
+if (micBoostOnBtn) micBoostOnBtn.addEventListener('click', () => setParentMicBoost(true));
+if (btnDimParent) btnDimParent.addEventListener('click', toggleParentDim);
+
+let lastDimTap = 0;
+dimOverlay.addEventListener('click', (e) => {
+    if (role !== 'child') return;
+    const now = Date.now();
+    const tapLength = now - lastDimTap;
+    if (tapLength < 500 && tapLength > 0) {
+        setDimOverlay(false);
+        sendDimStateFromChild(false);
+        e.preventDefault();
+    }
+    lastDimTap = now;
+});
 
 // Initialization
 async function startSession(selectedRole) {
@@ -138,11 +152,15 @@ async function startSession(selectedRole) {
         ensureDebugPanel();
         audioUnlocked = false;
         pendingRemoteStream = null;
+        childMode = 'transparency';
+        micBoostEnabled = false;
+        isDimmed = false;
         lastCryTs = null;
         cryStartTs = null;
         cryCooldownUntil = 0;
         noiseFloorDb = null;
         lastVadSampleTs = null;
+        gateStartTs = null;
         if (lastCryInterval) {
             clearInterval(lastCryInterval);
             lastCryInterval = null;
@@ -213,6 +231,10 @@ function switchToMonitor() {
     if (role === 'child') {
         childControls.classList.remove('hidden');
         if (lastCryEl) lastCryEl.classList.add('hidden');
+        if (vadStatus) {
+            vadStatus.textContent = 'Transparency Mode (Always On)';
+            vadStatus.style.color = '#69f0ae';
+        }
     } else {
         parentControls.classList.remove('hidden');
         if (lastCryEl) {
@@ -220,6 +242,7 @@ function switchToMonitor() {
             updateLastCryDisplay();
             ensureLastCryInterval();
         }
+        updateSegmentedButtons();
     }
 }
 
@@ -227,6 +250,7 @@ function stopSession() {
     if (peer) peer.destroy();
     if (localStream) localStream.getTracks().forEach(track => track.stop());
     if (vadTrack) vadTrack.stop();
+    if (sendStream) sendStream.getTracks().forEach(track => track.stop());
     if (wakeLock) wakeLock.release();
     if (reconnectInterval) clearInterval(reconnectInterval);
     if (vadInterval) clearInterval(vadInterval);
@@ -258,33 +282,104 @@ async function requestWakeLock() {
     }
 }
 
-function toggleDim() {
-    dimOverlay.classList.toggle('hidden');
-    if (!dimOverlay.classList.contains('hidden')) {
+function setDimOverlay(enabled) {
+    isDimmed = enabled;
+    if (enabled) {
+        dimOverlay.classList.remove('hidden');
         dimOverlay.innerHTML = '<p>Double-tap to wake</p>';
-    }
-}
-
-function updateSensitivityLabel() {
-    const val = vadSensitivity.value;
-    let label = 'Medium';
-    if (val < 30) label = 'Low (Hears only loud noises)';
-    else if (val > 70) label = 'High (Hears everything)';
-    else label = 'Medium';
-    vadValueDisplay.textContent = label;
-}
-
-function updateVolumeLabel() {
-    const val = volumeControl.value;
-    volumeValueDisplay.textContent = `${val}%`;
-    if (gainNode) {
-        gainNode.gain.setTargetAtTime(val / 100, audioCtx.currentTime, 0.05);
+        stopVisualizer();
+    } else {
+        dimOverlay.classList.add('hidden');
+        if (analyser && lastVisualizerPrefix) {
+            visualize(lastVisualizerPrefix);
+        }
     }
 }
 
 // PeerJS & Logic
 function getPeerId(r) {
     return `babymonitor-${roomId}-${r}`;
+}
+
+function updateSegmentedButtons() {
+    if (modeTransparencyBtn && modeMinimalBtn) {
+        modeTransparencyBtn.classList.toggle('active', childMode === 'transparency');
+        modeMinimalBtn.classList.toggle('active', childMode === 'minimal');
+    }
+    if (micBoostOffBtn && micBoostOnBtn) {
+        micBoostOffBtn.classList.toggle('active', !micBoostEnabled);
+        micBoostOnBtn.classList.toggle('active', micBoostEnabled);
+    }
+    if (btnDimParent) {
+        btnDimParent.textContent = isDimmed ? 'Wake Child Screen' : 'Dim Child Screen';
+    }
+}
+
+function setParentMode(mode) {
+    childMode = mode;
+    updateSegmentedButtons();
+    sendCurrentSettings();
+}
+
+function setParentMicBoost(enabled) {
+    micBoostEnabled = enabled;
+    updateSegmentedButtons();
+    sendCurrentSettings();
+}
+
+function toggleParentDim() {
+    isDimmed = !isDimmed;
+    updateSegmentedButtons();
+    sendDimState();
+}
+
+function sendCurrentSettings() {
+    if (dataConn && dataConn.open) {
+        dataConn.send({ type: 'settings', mode: childMode, micBoost: micBoostEnabled });
+    }
+}
+
+function sendDimState() {
+    if (dataConn && dataConn.open) {
+        dataConn.send({ type: 'dim', enabled: isDimmed });
+    }
+}
+
+function sendDimStateFromChild(enabled) {
+    if (dataConn && dataConn.open) {
+        dataConn.send({ type: 'dim', enabled, source: 'child' });
+    }
+}
+
+function setParentDimStateFromChild(enabled) {
+    isDimmed = enabled;
+    updateSegmentedButtons();
+}
+
+function applyChildSettings(settings) {
+    if (!settings) return;
+    if (settings.mode === 'transparency' || settings.mode === 'minimal') {
+        childMode = settings.mode;
+    }
+    if (typeof settings.micBoost === 'boolean') {
+        micBoostEnabled = settings.micBoost;
+        applyMicBoost();
+    }
+    if (childMode === 'transparency') {
+        ensureTransmission(true);
+        if (vadStatus) {
+            vadStatus.textContent = 'Transparency Mode (Always On)';
+            vadStatus.style.color = '#69f0ae';
+        }
+    } else if (childMode === 'minimal') {
+        if (!isTransmitting) {
+            ensureTransmission(false);
+        }
+        if (vadStatus) {
+            vadStatus.textContent = isTransmitting ? 'Minimal Mode (Transmitting)' : 'Minimal Mode (Listening)';
+            vadStatus.style.color = isTransmitting ? '#ff5252' : '#69f0ae';
+        }
+    }
 }
 
 function ensureLastCryInterval() {
@@ -321,6 +416,20 @@ function handleCryMessage(data) {
     ensureLastCryInterval();
 }
 
+function handleParentDataMessage(data) {
+    if (!data || !data.type) return;
+    if (data.type === 'cry') handleCryMessage(data);
+    if (data.type === 'dim' && typeof data.enabled === 'boolean') {
+        setParentDimStateFromChild(data.enabled);
+    }
+}
+
+function handleChildDataMessage(data) {
+    if (!data || !data.type) return;
+    if (data.type === 'settings') applyChildSettings(data);
+    if (data.type === 'dim') setDimOverlay(!!data.enabled);
+}
+
 function sendCryEvent(ts) {
     if (dataConn && dataConn.open) {
         dataConn.send({ type: 'cry', ts });
@@ -333,6 +442,7 @@ function connectDataChannel() {
     if (dataConn) dataConn.close();
     dataConn = peer.connect(targetId, { reliable: true });
     dataConn.on('open', () => log('Data channel open', false));
+    dataConn.on('data', handleChildDataMessage);
     dataConn.on('error', (err) => log(`Data channel error: ${err.type || err}`, true));
     dataConn.on('close', () => log('Data channel closed', true));
 }
@@ -396,6 +506,7 @@ async function startStreaming() {
         }
         
         setupVAD(localStream);
+        setupTransmitChain(localStream);
         connectToParent();
         
     } catch (err) {
@@ -451,35 +562,84 @@ function setupVAD(stream) {
         updateNoiseFloor(levelDb, dt);
         maybeDetectCry(levelDb, now);
         
-        const sliderVal = parseInt(vadSensitivity.value);
-        const threshold = 60 - (sliderVal * 0.55); 
-        const audioTrack = stream.getAudioTracks()[0];
-        
+        const thresholdDb = noiseFloorDb !== null ? noiseFloorDb + CRY_CONFIG.minDbAboveNoise : null;
         if (logCounter % 50 === 0) {
-            console.log(`VAD: RMS=${rms.toFixed(1)}, Threshold=${threshold.toFixed(1)}, Active=${isTransmitting}`);
+            console.log(`VAD: dB=${levelDb.toFixed(1)}, Threshold=${thresholdDb !== null ? thresholdDb.toFixed(1) : 'n/a'}, Mode=${childMode}, Active=${isTransmitting}`);
         }
         logCounter++;
 
-        if (rms > threshold) {
-            lastNoiseTime = now;
+        if (childMode === 'transparency') {
             if (!isTransmitting) {
-                isTransmitting = true;
-                if (audioTrack) audioTrack.enabled = true;
-                vadStatus.textContent = "Transmitting (Noise Detected)";
-                vadStatus.style.color = "#ff5252";
-                log("VAD: Noise detected, resuming transmission");
+                ensureTransmission(true);
+            }
+            if (vadStatus) {
+                vadStatus.textContent = 'Transparency Mode (Always On)';
+                vadStatus.style.color = '#69f0ae';
+            }
+            return;
+        }
+
+        if (thresholdDb !== null && levelDb >= thresholdDb) {
+            if (!gateStartTs) gateStartTs = now;
+            const sustainMs = CRY_CONFIG.sustainedSeconds * 1000;
+            if (now - gateStartTs >= sustainMs) {
+                lastNoiseTime = now;
+                if (!isTransmitting) {
+                    ensureTransmission(true);
+                    if (vadStatus) {
+                        vadStatus.textContent = 'Minimal Mode (Transmitting)';
+                        vadStatus.style.color = '#ff5252';
+                    }
+                    log('VAD: Sustained noise, resuming transmission');
+                }
             }
         } else {
-            if (isTransmitting && (now - lastNoiseTime > VAD_HOLD_TIME)) {
-                isTransmitting = false;
-                if (audioTrack) audioTrack.enabled = false;
-                vadStatus.textContent = "Monitoring (Silence - Saving Data)";
-                vadStatus.style.color = "#69f0ae";
-                log("VAD: Silence detected, pausing transmission");
+            gateStartTs = null;
+        }
+
+        if (isTransmitting && (now - lastNoiseTime > VAD_HOLD_TIME)) {
+            ensureTransmission(false);
+            if (vadStatus) {
+                vadStatus.textContent = 'Minimal Mode (Listening)';
+                vadStatus.style.color = '#69f0ae';
             }
+            log('VAD: Silence detected, pausing transmission');
         }
         
     }, 100);
+}
+
+function setupTransmitChain(stream) {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (micGainNode) {
+        try { micGainNode.disconnect(); } catch (e) {}
+    }
+
+    const source = audioCtx.createMediaStreamSource(stream);
+    micGainNode = audioCtx.createGain();
+    micGainNode.gain.value = micBoostEnabled ? 2.5 : 1.0;
+
+    const destination = audioCtx.createMediaStreamDestination();
+    source.connect(micGainNode);
+    micGainNode.connect(destination);
+
+    sendStream = destination.stream;
+    sendTrack = sendStream.getAudioTracks()[0];
+    ensureTransmission(childMode === 'transparency');
+}
+
+function applyMicBoost() {
+    if (!micGainNode || !audioCtx) return;
+    const target = micBoostEnabled ? 2.5 : 1.0;
+    micGainNode.gain.setTargetAtTime(target, audioCtx.currentTime, 0.05);
+}
+
+function ensureTransmission(enabled) {
+    if (!sendTrack) return;
+    sendTrack.enabled = enabled;
+    isTransmitting = enabled;
 }
 
 function rmsToDb(rms) {
@@ -529,7 +689,7 @@ function connectToParent() {
     const targetId = `babymonitor-${roomId}-parent`;
     log(`Calling Parent (${targetId})...`, false);
     
-    const call = peer.call(targetId, localStream);
+    const call = peer.call(targetId, sendStream || localStream);
     currentCall = call;
     attachCallConnectionListeners(call, 'child');
     startStatsLoop(call, 'outbound');
@@ -591,7 +751,11 @@ function initParent() {
     peer.on('connection', (conn) => {
         if (dataConn) dataConn.close();
         dataConn = conn;
-        dataConn.on('data', handleCryMessage);
+        dataConn.on('data', handleParentDataMessage);
+        dataConn.on('open', () => {
+            sendCurrentSettings();
+            sendDimState();
+        });
         dataConn.on('error', (err) => log(`Data channel error: ${err.type || err}`, true));
         dataConn.on('close', () => log('Data channel closed', true));
     });
@@ -669,8 +833,7 @@ function startPlayback(stream) {
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 256;
     gainNode = audioCtx.createGain();
-    const initialVolume = volumeControl ? parseInt(volumeControl.value) : 100;
-    gainNode.gain.setValueAtTime(initialVolume / 100, audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(3.0, audioCtx.currentTime);
     source.connect(analyser);
     analyser.connect(gainNode);
     gainNode.connect(audioCtx.destination);
@@ -721,6 +884,7 @@ function visualize(prefix) {
     const dataArray = new Uint8Array(bufferLength);
     const dbMeterFill = document.getElementById(`${prefix}-db-level`);
 
+    lastVisualizerPrefix = prefix;
     visualizerActive = true;
     function draw() {
         if (!analyser || !visualizerActive) return;
