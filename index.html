@@ -18,11 +18,11 @@
             <div class="role-selection">
                 <button id="btn-child" class="btn-large">
                     <span class="icon">👶</span>
-                    Child Unit (Sender)
+                    Child Unit
                 </button>
                 <button id="btn-parent" class="btn-large">
                     <span class="icon">👂</span>
-                    Parent Unit (Receiver)
+                    Parent Unit
                 </button>
             </div>
 
@@ -47,7 +47,7 @@
                 </div>
                 <div class="status-wrap">
                     <div id="connection-status" class="status-indicator disconnected"></div>
-                    <div id="status-text" class="status-text">Disconnected · --</div>
+                    <div id="status-text" class="status-text">Disconnected · Room: --</div>
                 </div>
             </header>
 
@@ -55,6 +55,10 @@
                 <!-- Child View Elements -->
                 <div id="child-controls" class="hidden">
                     <div id="vad-status" class="status-message">Microphone Active</div>
+                    <div id="white-noise-status" class="white-noise-status hidden">
+                        White Noise Active <span id="white-noise-remaining" class="white-noise-remaining"></span>
+                    </div>
+                    <button id="white-noise-cta" class="btn-secondary hidden" type="button">Tap to enable white noise</button>
                     
                     <!-- Unified Visualizer (Same as Parent) -->
                     <div class="visualizer-container">
@@ -83,11 +87,16 @@
                     </div>
 
                     <div class="control-group">
-                        <label>Mic Boost</label>
-                        <div class="segmented">
-                            <button id="mic-boost-off" class="seg-btn active" type="button">Off</button>
-                            <button id="mic-boost-on" class="seg-btn" type="button">On</button>
-                        </div>
+                        <label>White Noise</label>
+                        <button id="white-noise-toggle" class="btn-secondary" type="button">Start White Noise</button>
+                        <label for="white-noise-volume">Volume</label>
+                        <input id="white-noise-volume" type="range" min="0" max="100" value="50">
+                        <label for="white-noise-timer">Timer</label>
+                        <select id="white-noise-timer">
+                            <option value="1800000">30 min</option>
+                            <option value="3600000">60 min</option>
+                            <option value="infinite" selected>Infinite</option>
+                        </select>
                     </div>
 
                     <button id="btn-dim-parent" class="btn-secondary" type="button">Dim Child Screen</button>
@@ -97,6 +106,10 @@
                     <div id="audio-status">Waiting for audio...</div>
                 </div>
             </main>
+            
+            <audio id="white-noise-audio" preload="auto" loop playsinline style="display:none;">
+                <source src="assets/audio/white-noise.mp3" type="audio/mpeg">
+            </audio>
 
             <footer>
                 <button id="btn-stop" class="btn-danger">Stop & Exit</button>

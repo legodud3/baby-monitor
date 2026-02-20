@@ -20,9 +20,14 @@ const lastCryEl = document.getElementById('last-cry');
 const statusText = document.getElementById('status-text');
 const modeTransparencyBtn = document.getElementById('mode-transparency');
 const modeMinimalBtn = document.getElementById('mode-minimal');
-const micBoostOffBtn = document.getElementById('mic-boost-off');
-const micBoostOnBtn = document.getElementById('mic-boost-on');
 const btnDimParent = document.getElementById('btn-dim-parent');
+const whiteNoiseToggle = document.getElementById('white-noise-toggle');
+const whiteNoiseVolumeInput = document.getElementById('white-noise-volume');
+const whiteNoiseTimerSelect = document.getElementById('white-noise-timer');
+const whiteNoiseAudio = document.getElementById('white-noise-audio');
+const whiteNoiseStatus = document.getElementById('white-noise-status');
+const whiteNoiseRemaining = document.getElementById('white-noise-remaining');
+const whiteNoiseCta = document.getElementById('white-noise-cta');
 
 // State
 let role = null;
@@ -70,11 +75,18 @@ let lastVisualizerPrefix = null;
 let sendStream = null;
 let sendTrack = null;
 let micGainNode = null;
-let micBoostEnabled = false;
+let micBoostEnabled = true;
 let childMode = 'transparency';
 let gateStartTs = null;
 let isDimmed = false;
 let connectionState = 'disconnected';
+let whiteNoiseEnabled = false;
+let whiteNoiseVolume = 0.5;
+let whiteNoiseDurationMs = null;
+let whiteNoiseStartedAt = null;
+let whiteNoiseStopTimeout = null;
+let whiteNoiseUiInterval = null;
+let whiteNoiseAutoplayBlocked = false;
 
 // Constants
 const MAX_LOG_ENTRIES = 200;
@@ -111,6 +123,7 @@ const CRY_CONFIG = Object.assign({
     noiseFloorWindowSeconds: 8,
     noiseFloorUpdateMarginDb: 3
 }, window.CRY_CONFIG || {});
+const VAD_MIN_DB_ABOVE_NOISE = Math.max(6, CRY_CONFIG.minDbAboveNoise - 4);
 
 const STORAGE_PREFIX = 'kgbaby';
 const STORAGE_VERSION = 'v1';
@@ -183,6 +196,23 @@ function log(msg, isError = false) {
     }
 }
 
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function formatRemaining(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function parseDurationValue(value) {
+    if (value === 'infinite') return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
 function selectRole(nextRole) {
     selectedRole = nextRole;
     btnChild.classList.toggle('selected', nextRole === 'child');
@@ -214,10 +244,12 @@ btnStop.addEventListener('click', stopSession);
 btnListen.addEventListener('click', resumeAudioContext);
 if (modeTransparencyBtn) modeTransparencyBtn.addEventListener('click', () => setParentMode('transparency'));
 if (modeMinimalBtn) modeMinimalBtn.addEventListener('click', () => setParentMode('minimal'));
-if (micBoostOffBtn) micBoostOffBtn.addEventListener('click', () => setParentMicBoost(false));
-if (micBoostOnBtn) micBoostOnBtn.addEventListener('click', () => setParentMicBoost(true));
 if (btnDimParent) btnDimParent.addEventListener('click', toggleParentDim);
 if (roomIdInput) roomIdInput.addEventListener('input', updateConnectState);
+if (whiteNoiseToggle) whiteNoiseToggle.addEventListener('click', toggleParentWhiteNoise);
+if (whiteNoiseVolumeInput) whiteNoiseVolumeInput.addEventListener('input', handleWhiteNoiseVolumeInput);
+if (whiteNoiseTimerSelect) whiteNoiseTimerSelect.addEventListener('change', handleWhiteNoiseTimerChange);
+if (whiteNoiseCta) whiteNoiseCta.addEventListener('click', () => attemptWhiteNoisePlayback());
 
 updateConnectState();
 
@@ -242,7 +274,7 @@ async function startSession(selectedRole) {
         audioUnlocked = false;
         pendingRemoteStream = null;
         childMode = 'transparency';
-        micBoostEnabled = false;
+        micBoostEnabled = true;
         isDimmed = false;
         lastCryTs = null;
         cryStartTs = null;
@@ -324,11 +356,29 @@ async function startSession(selectedRole) {
         if (stored.childMode === 'transparency' || stored.childMode === 'minimal') {
             childMode = stored.childMode;
         }
-        if (typeof stored.micBoostEnabled === 'boolean') {
-            micBoostEnabled = stored.micBoostEnabled;
-        }
         if (role === 'parent' && typeof stored.lastCryTs === 'number') {
             lastCryTs = stored.lastCryTs;
+        }
+        if (typeof stored.whiteNoiseEnabled === 'boolean') {
+            whiteNoiseEnabled = stored.whiteNoiseEnabled;
+        }
+        if (typeof stored.whiteNoiseVolume !== 'undefined') {
+            const storedVolume = Number(stored.whiteNoiseVolume);
+            if (Number.isFinite(storedVolume)) {
+                whiteNoiseVolume = clamp(storedVolume, 0, 1);
+            }
+        }
+        if (Object.prototype.hasOwnProperty.call(stored, 'whiteNoiseDurationMs')) {
+            const storedDuration = stored.whiteNoiseDurationMs;
+            if (storedDuration === null) {
+                whiteNoiseDurationMs = null;
+            } else {
+                const numeric = Number(storedDuration);
+                whiteNoiseDurationMs = Number.isFinite(numeric) ? numeric : null;
+            }
+        }
+        if (typeof stored.whiteNoiseStartedAt === 'number') {
+            whiteNoiseStartedAt = stored.whiteNoiseStartedAt;
         }
 
         if (role === 'child') {
@@ -348,7 +398,7 @@ async function startSession(selectedRole) {
 function switchToMonitor() {
     landingScreen.classList.add('hidden');
     monitorScreen.classList.remove('hidden');
-    roleDisplay.textContent = role === 'child' ? 'Child Unit (Sender)' : 'Parent Unit (Receiver)';
+    roleDisplay.textContent = role === 'child' ? 'Child Unit' : 'Parent Unit';
     if (role === 'child') {
         childControls.classList.remove('hidden');
         if (lastCryEl) lastCryEl.classList.add('hidden');
@@ -365,6 +415,7 @@ function switchToMonitor() {
         }
         updateSegmentedButtons();
     }
+    applyWhiteNoiseStateFromStorage();
 }
 
 function stopSession() {
@@ -398,6 +449,8 @@ function stopSession() {
     peerReconnectTimer = null;
     stopVisualizer();
     teardownAudioGraph();
+    clearWhiteNoiseTimers();
+    stopWhiteNoisePlayback();
     if (audioCtx) audioCtx.close();
     if (silentAudioCtx) silentAudioCtx.close();
     silentStream = null;
@@ -442,6 +495,242 @@ function setDimOverlay(enabled) {
     }
 }
 
+function updateWhiteNoiseControls() {
+    if (whiteNoiseToggle) {
+        whiteNoiseToggle.textContent = whiteNoiseEnabled ? 'Stop White Noise' : 'Start White Noise';
+    }
+    if (whiteNoiseVolumeInput) {
+        whiteNoiseVolumeInput.value = Math.round(clamp(whiteNoiseVolume, 0, 1) * 100).toString();
+    }
+    if (whiteNoiseTimerSelect) {
+        whiteNoiseTimerSelect.value = whiteNoiseDurationMs === null ? 'infinite' : String(whiteNoiseDurationMs);
+    }
+}
+
+function updateWhiteNoiseStatus() {
+    if (!whiteNoiseStatus) return;
+    if (!whiteNoiseEnabled) {
+        whiteNoiseStatus.classList.add('hidden');
+        if (whiteNoiseRemaining) whiteNoiseRemaining.textContent = '';
+        return;
+    }
+    whiteNoiseStatus.classList.remove('hidden');
+    if (!whiteNoiseRemaining) return;
+    if (whiteNoiseDurationMs === null) {
+        whiteNoiseRemaining.textContent = '(∞)';
+        return;
+    }
+    const elapsed = whiteNoiseStartedAt ? (Date.now() - whiteNoiseStartedAt) : 0;
+    const remaining = whiteNoiseDurationMs - elapsed;
+    whiteNoiseRemaining.textContent = `(${formatRemaining(remaining)})`;
+}
+
+function updateWhiteNoiseCta() {
+    if (!whiteNoiseCta) return;
+    const shouldShow = whiteNoiseEnabled && whiteNoiseAutoplayBlocked;
+    whiteNoiseCta.classList.toggle('hidden', !shouldShow);
+}
+
+function clearWhiteNoiseTimers() {
+    if (whiteNoiseStopTimeout) clearTimeout(whiteNoiseStopTimeout);
+    if (whiteNoiseUiInterval) clearInterval(whiteNoiseUiInterval);
+    whiteNoiseStopTimeout = null;
+    whiteNoiseUiInterval = null;
+}
+
+function startWhiteNoisePlayback() {
+    if (!whiteNoiseAudio || role !== 'child') return;
+    whiteNoiseAudio.volume = clamp(whiteNoiseVolume, 0, 1);
+    const playAttempt = whiteNoiseAudio.play();
+    if (playAttempt && typeof playAttempt.then === 'function') {
+        playAttempt.then(() => {
+            whiteNoiseAutoplayBlocked = false;
+            updateWhiteNoiseCta();
+        }).catch(() => {
+            whiteNoiseAutoplayBlocked = true;
+            updateWhiteNoiseCta();
+        });
+    }
+}
+
+function stopWhiteNoisePlayback() {
+    if (!whiteNoiseAudio || role !== 'child') return;
+    whiteNoiseAudio.pause();
+    whiteNoiseAudio.currentTime = 0;
+    whiteNoiseAutoplayBlocked = false;
+    updateWhiteNoiseCta();
+}
+
+function scheduleWhiteNoiseStop() {
+    clearWhiteNoiseTimers();
+    if (!whiteNoiseEnabled || whiteNoiseDurationMs === null) {
+        updateWhiteNoiseStatus();
+        return;
+    }
+    const elapsed = whiteNoiseStartedAt ? (Date.now() - whiteNoiseStartedAt) : 0;
+    const remaining = whiteNoiseDurationMs - elapsed;
+    if (remaining <= 0) {
+        handleWhiteNoiseAutoStop();
+        return;
+    }
+    whiteNoiseStopTimeout = setTimeout(handleWhiteNoiseAutoStop, remaining);
+    whiteNoiseUiInterval = setInterval(updateWhiteNoiseStatus, 1000);
+    updateWhiteNoiseStatus();
+}
+
+function setWhiteNoiseState(next) {
+    if (!next || typeof next !== 'object') return;
+    if (typeof next.enabled === 'boolean') {
+        whiteNoiseEnabled = next.enabled;
+    }
+    if (typeof next.volume === 'number') {
+        whiteNoiseVolume = clamp(next.volume, 0, 1);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'durationMs')) {
+        if (next.durationMs === null) {
+            whiteNoiseDurationMs = null;
+        } else if (typeof next.durationMs === 'number') {
+            whiteNoiseDurationMs = next.durationMs;
+        }
+    }
+    if (typeof next.startedAt === 'number') {
+        whiteNoiseStartedAt = next.startedAt;
+    }
+    if (!whiteNoiseEnabled) {
+        whiteNoiseStartedAt = null;
+        whiteNoiseAutoplayBlocked = false;
+    } else if (!whiteNoiseStartedAt) {
+        whiteNoiseStartedAt = Date.now();
+    }
+
+    saveStoredState(roomId, role, {
+        whiteNoiseEnabled,
+        whiteNoiseVolume,
+        whiteNoiseDurationMs,
+        whiteNoiseStartedAt,
+        updatedAt: Date.now()
+    });
+
+    updateWhiteNoiseControls();
+    if (role === 'child') {
+        if (whiteNoiseEnabled) {
+            ensureTransmission(true);
+            startWhiteNoisePlayback();
+        } else {
+            stopWhiteNoisePlayback();
+        }
+    }
+    scheduleWhiteNoiseStop();
+    updateWhiteNoiseStatus();
+    updateWhiteNoiseCta();
+}
+
+function handleWhiteNoiseAutoStop() {
+    const wasEnabled = whiteNoiseEnabled;
+    setWhiteNoiseState({ enabled: false });
+    if (wasEnabled && role === 'child') {
+        broadcastToParents({ type: 'white_noise', action: 'stop', source: 'timer' });
+    }
+}
+
+function attemptWhiteNoisePlayback() {
+    if (!whiteNoiseEnabled) return;
+    startWhiteNoisePlayback();
+}
+
+function toggleParentWhiteNoise() {
+    if (role !== 'parent') return;
+    if (whiteNoiseEnabled) {
+        setWhiteNoiseState({ enabled: false });
+        sendWhiteNoisePayload({ type: 'white_noise', action: 'stop' });
+        return;
+    }
+    setWhiteNoiseState({ enabled: true, startedAt: Date.now() });
+    sendWhiteNoisePayload({
+        type: 'white_noise',
+        action: 'start',
+        volume: whiteNoiseVolume,
+        durationMs: whiteNoiseDurationMs,
+        startedAt: whiteNoiseStartedAt
+    });
+}
+
+function handleWhiteNoiseVolumeInput() {
+    if (role !== 'parent' || !whiteNoiseVolumeInput) return;
+    const raw = Number(whiteNoiseVolumeInput.value);
+    if (!Number.isFinite(raw)) return;
+    const nextVolume = clamp(raw / 100, 0, 1);
+    setWhiteNoiseState({ volume: nextVolume });
+    if (whiteNoiseEnabled) {
+        sendWhiteNoisePayload({
+            type: 'white_noise',
+            action: 'start',
+            volume: whiteNoiseVolume,
+            durationMs: whiteNoiseDurationMs,
+            startedAt: whiteNoiseStartedAt
+        });
+    }
+}
+
+function handleWhiteNoiseTimerChange() {
+    if (role !== 'parent' || !whiteNoiseTimerSelect) return;
+    const nextDuration = parseDurationValue(whiteNoiseTimerSelect.value);
+    if (whiteNoiseEnabled) {
+        setWhiteNoiseState({ durationMs: nextDuration, startedAt: Date.now() });
+        sendWhiteNoisePayload({
+            type: 'white_noise',
+            action: 'start',
+            volume: whiteNoiseVolume,
+            durationMs: whiteNoiseDurationMs,
+            startedAt: whiteNoiseStartedAt
+        });
+        return;
+    }
+    setWhiteNoiseState({ durationMs: nextDuration });
+}
+
+function sendWhiteNoisePayload(payload) {
+    if (!payload || !payload.type) return;
+    if (role === 'child') {
+        broadcastToParents(payload);
+        return;
+    }
+    if (dataConn && dataConn.open) {
+        dataConn.send(payload);
+    }
+}
+
+function handleWhiteNoiseMessage(data) {
+    if (!data || data.type !== 'white_noise') return;
+    if (data.action === 'start') {
+        const volume = typeof data.volume === 'number' ? clamp(data.volume, 0, 1) : whiteNoiseVolume;
+        let durationMs = whiteNoiseDurationMs;
+        if (Object.prototype.hasOwnProperty.call(data, 'durationMs')) {
+            if (data.durationMs === null) {
+                durationMs = null;
+            } else {
+                const numeric = Number(data.durationMs);
+                durationMs = Number.isFinite(numeric) ? numeric : whiteNoiseDurationMs;
+            }
+        }
+        const startedAt = typeof data.startedAt === 'number' ? data.startedAt : Date.now();
+        setWhiteNoiseState({ enabled: true, volume, durationMs, startedAt });
+        return;
+    }
+    if (data.action === 'stop') {
+        setWhiteNoiseState({ enabled: false });
+    }
+}
+
+function applyWhiteNoiseStateFromStorage() {
+    setWhiteNoiseState({
+        enabled: whiteNoiseEnabled,
+        volume: whiteNoiseVolume,
+        durationMs: whiteNoiseDurationMs,
+        startedAt: whiteNoiseStartedAt
+    });
+}
+
 // PeerJS & Logic
 function getPeerId(r) {
     return `babymonitor-${roomId}-${r}`;
@@ -452,10 +741,6 @@ function updateSegmentedButtons() {
         modeTransparencyBtn.classList.toggle('active', childMode === 'transparency');
         modeMinimalBtn.classList.toggle('active', childMode === 'minimal');
     }
-    if (micBoostOffBtn && micBoostOnBtn) {
-        micBoostOffBtn.classList.toggle('active', !micBoostEnabled);
-        micBoostOnBtn.classList.toggle('active', micBoostEnabled);
-    }
     if (btnDimParent) {
         btnDimParent.textContent = isDimmed ? 'Wake Child Screen' : 'Dim Child Screen';
     }
@@ -464,14 +749,7 @@ function updateSegmentedButtons() {
 function setParentMode(mode) {
     childMode = mode;
     updateSegmentedButtons();
-    saveStoredState(roomId, role, { childMode, micBoostEnabled, updatedAt: Date.now() });
-    sendCurrentSettings();
-}
-
-function setParentMicBoost(enabled) {
-    micBoostEnabled = enabled;
-    updateSegmentedButtons();
-    saveStoredState(roomId, role, { childMode, micBoostEnabled, updatedAt: Date.now() });
+    saveStoredState(roomId, role, { childMode, updatedAt: Date.now() });
     sendCurrentSettings();
 }
 
@@ -491,7 +769,7 @@ function broadcastToParents(payload) {
 }
 
 function sendCurrentSettings() {
-    const payload = { type: 'settings', mode: childMode, micBoost: micBoostEnabled };
+    const payload = { type: 'settings', mode: childMode };
     if (role === 'child') {
         broadcastToParents(payload);
         return;
@@ -527,11 +805,7 @@ function applyChildSettings(settings) {
     if (settings.mode === 'transparency' || settings.mode === 'minimal') {
         childMode = settings.mode;
     }
-    if (typeof settings.micBoost === 'boolean') {
-        micBoostEnabled = settings.micBoost;
-        applyMicBoost();
-    }
-    saveStoredState(roomId, 'child', { childMode, micBoostEnabled, updatedAt: Date.now() });
+    saveStoredState(roomId, 'child', { childMode, updatedAt: Date.now() });
     sendCurrentSettings();
     if (childMode === 'transparency') {
         ensureTransmission(true);
@@ -557,13 +831,9 @@ function applyParentSettings(settings) {
         childMode = settings.mode;
         changed = true;
     }
-    if (typeof settings.micBoost === 'boolean') {
-        micBoostEnabled = settings.micBoost;
-        changed = true;
-    }
     if (changed) {
         updateSegmentedButtons();
-        saveStoredState(roomId, 'parent', { childMode, micBoostEnabled, updatedAt: Date.now() });
+        saveStoredState(roomId, 'parent', { childMode, updatedAt: Date.now() });
     }
 }
 
@@ -609,6 +879,7 @@ function handleParentDataMessage(data) {
     if (data.type === 'dim' && typeof data.enabled === 'boolean') {
         setParentDimStateFromChild(data.enabled);
     }
+    if (data.type === 'white_noise') handleWhiteNoiseMessage(data);
 }
 
 function handleChildDataMessage(data) {
@@ -618,6 +889,7 @@ function handleChildDataMessage(data) {
         setDimOverlay(!!data.enabled);
         sendDimState();
     }
+    if (data.type === 'white_noise') handleWhiteNoiseMessage(data);
 }
 
 function sendCryEvent(ts) {
@@ -632,6 +904,17 @@ function connectDataChannelToChild() {
     dataConn.on('open', () => {
         log('Data channel open', false);
         resetParentRetry();
+        if (whiteNoiseEnabled) {
+            sendWhiteNoisePayload({
+                type: 'white_noise',
+                action: 'start',
+                volume: whiteNoiseVolume,
+                durationMs: whiteNoiseDurationMs,
+                startedAt: whiteNoiseStartedAt
+            });
+        } else {
+            sendWhiteNoisePayload({ type: 'white_noise', action: 'stop' });
+        }
     });
     dataConn.on('data', handleParentDataMessage);
     dataConn.on('error', (err) => {
@@ -654,6 +937,15 @@ function handleIncomingParentConnection(conn) {
         log('Parent data channel open', false);
         sendCurrentSettings();
         sendDimState();
+        if (whiteNoiseEnabled && conn.open) {
+            conn.send({
+                type: 'white_noise',
+                action: 'start',
+                volume: whiteNoiseVolume,
+                durationMs: whiteNoiseDurationMs,
+                startedAt: whiteNoiseStartedAt
+            });
+        }
     });
     conn.on('error', (err) => log(`Parent data channel error: ${err.type || err}`, true));
     conn.on('close', () => {
@@ -845,9 +1137,9 @@ function setupVAD(stream) {
         updateNoiseFloor(levelDb, dt);
         maybeDetectCry(levelDb, now);
         
-        const thresholdDb = noiseFloorDb !== null ? noiseFloorDb + CRY_CONFIG.minDbAboveNoise : null;
+        const vadThresholdDb = noiseFloorDb !== null ? noiseFloorDb + VAD_MIN_DB_ABOVE_NOISE : null;
         if (logCounter % 50 === 0) {
-            console.log(`VAD: dB=${levelDb.toFixed(1)}, Threshold=${thresholdDb !== null ? thresholdDb.toFixed(1) : 'n/a'}, Mode=${childMode}, Active=${isTransmitting}`);
+            console.log(`VAD: dB=${levelDb.toFixed(1)}, Threshold=${vadThresholdDb !== null ? vadThresholdDb.toFixed(1) : 'n/a'}, Mode=${childMode}, Active=${isTransmitting}`);
         }
         logCounter++;
 
@@ -862,7 +1154,18 @@ function setupVAD(stream) {
             return;
         }
 
-        if (thresholdDb !== null && levelDb >= thresholdDb) {
+        if (whiteNoiseEnabled) {
+            if (!isTransmitting) {
+                ensureTransmission(true);
+            }
+            if (vadStatus) {
+                vadStatus.textContent = 'Minimal Mode (White Noise Active)';
+                vadStatus.style.color = '#ffcc00';
+            }
+            return;
+        }
+
+        if (vadThresholdDb !== null && levelDb >= vadThresholdDb) {
             if (!gateStartTs) gateStartTs = now;
             const sustainMs = CRY_CONFIG.sustainedSeconds * 1000;
             if (now - gateStartTs >= sustainMs) {
@@ -889,7 +1192,7 @@ function setupVAD(stream) {
             log('VAD: Silence detected, pausing transmission');
         }
         
-    }, 100);
+    }, 250);
 }
 
 function setupTransmitChain(stream) {
@@ -911,12 +1214,6 @@ function setupTransmitChain(stream) {
     sendStream = destination.stream;
     sendTrack = sendStream.getAudioTracks()[0];
     ensureTransmission(childMode === 'transparency');
-}
-
-function applyMicBoost() {
-    if (!micGainNode || !audioCtx) return;
-    const target = micBoostEnabled ? 3.5 : 1.0;
-    micGainNode.gain.setTargetAtTime(target, audioCtx.currentTime, 0.05);
 }
 
 function ensureTransmission(enabled) {
@@ -1207,12 +1504,9 @@ function updateStatus(isConnected, type = 'server') {
 function setStatusText(state) {
     connectionState = state;
     if (!statusText) return;
-    let icon = '🔴';
-    if (state === 'connected') icon = '🟢';
-    if (state === 'waiting') icon = '🟡';
     const room = roomId || '--';
-    const label = state === 'connected' ? 'Connected' : (state === 'waiting' ? 'Waiting' : 'Disconnected');
-    statusText.textContent = `${icon} ${label} · ${room}`;
+    const label = state === 'connected' ? 'Audio connected' : (state === 'waiting' ? 'Waiting' : 'Disconnected');
+    statusText.textContent = `${label} · Room: ${room}`;
 
     if (statusIndicator) {
         statusIndicator.classList.remove('connected', 'disconnected', 'waiting');

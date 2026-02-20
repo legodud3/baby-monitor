@@ -10,10 +10,11 @@ A secure, zero-latency audio monitor that works over your local network using We
 - **Smart Audio**:
     - **Child Unit**: Noise suppression and auto-gain (hears whispers, ignores fans).
     - **Parent Unit**: Visual audio meter to see noise even when muted.
-- **Parent-Only Controls**: Mode (Transparency/Minimal), Mic Boost, and Dim Child Screen.
+- **Parent-Only Controls**: Mode (Transparency/Minimal), White Noise, and Dim Child Screen.
+- **White Noise**: Parent can start a looped white noise track on the child device with volume and a 30/60/Infinite timer (audible on Parent).
 - **Last Cry Indicator**: Parent shows “Last cry” based on sustained noise detection (This feature is WIP).
 - **Multiple Parents**: More than one parent device can connect to the same child (same room name).
-- **Local Settings**: Mode, mic boost, and last cry persist per room on each device.
+- **Local Settings**: Mode, white noise settings, and last cry persist per room on each device.
 - **Loud Alert Output**: Parent audio is amplified for alerting (fidelity tradeoff).
 - **Reliability**: Auto-reconnection if Wi-Fi drops.
 
@@ -36,7 +37,7 @@ A secure, zero-latency audio monitor that works over your local network using We
    - **Child Unit**: Allow microphone access.
    - **Parent Unit**: Wait for the status to show **Connected**. 
    - If audio doesn't play automatically, tap "Start Listening".
-   - Use parent controls to switch **Transparency/Minimal**, toggle **Mic Boost**, or **Dim Child Screen**.
+   - Use parent controls to switch **Transparency/Minimal**, start **White Noise**, or **Dim Child Screen**.
 
 ## Multiple Parents
 
@@ -62,7 +63,7 @@ Use this section as your basic setup checklist (screenshots/video can be added h
    - **Minimal**: transmits only on sustained noise above the adaptive threshold.
 
 4. **Boost When Needed**
-   - If the parent audio is too quiet, enable **Mic Boost** and raise device volume.
+   - If the parent audio is too quiet, raise device volume (audio is amplified by default).
 
 ## Recommended Setup
 
@@ -126,8 +127,9 @@ TURN relays audio when direct connections are blocked. It requires a TURN server
 ## Troubleshooting
 
 - **No Audio?**: Ensure the Parent unit has tapped "Start Listening" (browsers block auto-play audio).
-- **Too Quiet?**: Turn on **Mic Boost** and increase device volume; output is optimized for loud alerting.
-- **Settings Persist Locally**: Mode/mic boost and “last cry” are saved per room in browser storage. Use Stop & Exit to clear the last-cry timer on that device.
+- **White Noise Won't Start?**: On the child device, tap “Tap to enable white noise” when prompted (autoplay restrictions).
+- **Too Quiet?**: Increase device volume; output is optimized for loud alerting.
+- **Settings Persist Locally**: Mode, white noise settings, and “last cry” are saved per room in browser storage. Use Stop & Exit to clear the last-cry timer on that device.
 - **Connection Failed?**: Refresh both pages and try a different Room Name.
 - **Echo?**: Ensure the Parent unit is not in the same room as the Child unit.
 
@@ -145,6 +147,11 @@ Runs with zero build steps.
 # Serve locally
 npx serve
 ```
+
+## Audio Assets
+
+- `assets/audio/white-noise.mp3` is generated locally using FFmpeg’s `anoisesrc` noise source.
+- If you want a CC0 external source, replace this file with a white-noise sample (e.g., the SignatureSounds CC0 pack referenced in planning).
 
 ## License
 
