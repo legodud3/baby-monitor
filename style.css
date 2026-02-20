@@ -28,7 +28,7 @@ body {
 #app {
     width: 100%;
     max-width: 480px;
-    padding: 20px;
+    padding: 18px;
     text-align: center;
 }
 
@@ -36,7 +36,7 @@ body {
 #landing-screen {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 18px;
 }
 
 h1 {
@@ -48,21 +48,21 @@ h1 {
 .role-selection {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 15px;
+    gap: 13px;
 }
 
 .btn-large {
     background-color: var(--card-bg);
     border: 2px solid var(--secondary-color);
     border-radius: 12px;
-    padding: 20px;
+    padding: 18px;
     color: var(--text-color);
     font-size: 1.1rem;
     cursor: pointer;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     transition: transform 0.1s, border-color 0.2s;
 }
 
@@ -83,10 +83,10 @@ h1 {
 
 /* Inputs */
 .room-input-container {
-    margin-top: 20px;
+    margin-top: 16px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     text-align: left;
 }
 
@@ -98,7 +98,7 @@ label {
 input[type="text"] {
     background-color: var(--card-bg);
     border: 1px solid var(--secondary-color);
-    padding: 15px;
+    padding: 13px;
     border-radius: 8px;
     color: var(--text-color);
     font-size: 1.2rem;
@@ -118,8 +118,8 @@ input:focus {
 .segmented {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-top: 8px;
+    gap: 6px;
+    margin-top: 6px;
 }
 
 .seg-btn {
@@ -142,15 +142,16 @@ input:focus {
 #monitor-screen {
     display: flex;
     flex-direction: column;
-    height: 90vh;
-    justify-content: space-between;
+    min-height: 90vh;
+    gap: 14px;
+    justify-content: flex-start;
 }
 
 header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
 }
 
 .header-left {
@@ -196,14 +197,14 @@ header {
 
 /* Buttons */
 .btn-primary, .btn-secondary, .btn-danger {
-    padding: 15px 30px;
+    padding: 13px 26px;
     border: none;
     border-radius: 8px;
     font-size: 1rem;
     font-weight: bold;
     cursor: pointer;
     width: 100%;
-    margin-top: 10px;
+    margin-top: 8px;
 }
 
 .btn-primary { background-color: var(--primary-color); color: #000; }
@@ -220,7 +221,7 @@ header {
 /* Visualizer */
 .visualizer-container {
     width: 100%;
-    margin: 16px 0 24px;
+    margin: 12px 0 18px;
 }
 
 .meter-background {
@@ -261,16 +262,16 @@ header {
 /* VAD Controls */
 .control-group {
     background-color: var(--card-bg);
-    padding: 15px;
+    padding: 13px;
     border-radius: 8px;
-    margin: 18px 0;
+    margin: 14px 0;
     text-align: left;
 }
 
 .status-message {
     font-size: 1.2rem;
     font-weight: bold;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
     min-height: 1.5em;
     color: var(--accent-green);
     transition: color 0.3s;
@@ -307,7 +308,7 @@ input[type=range]::-webkit-slider-runnable-track {
 #parent-controls {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 14px;
 }
 
 @media (max-height: 700px) {
@@ -316,25 +317,25 @@ input[type=range]::-webkit-slider-runnable-track {
     }
 
     header {
-        margin-bottom: 12px;
+        margin-bottom: 10px;
     }
 
     #child-controls,
     #parent-controls {
-        gap: 12px;
+        gap: 10px;
     }
 
     .visualizer-container {
-        margin: 8px 0 12px;
+        margin: 6px 0 10px;
     }
 
     .control-group {
-        margin: 12px 0;
-        padding: 12px;
+        margin: 10px 0;
+        padding: 10px;
     }
 
     .btn-primary, .btn-secondary, .btn-danger {
-        padding: 12px 20px;
+        padding: 10px 18px;
     }
 }
 

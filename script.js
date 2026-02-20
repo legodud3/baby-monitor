@@ -49,11 +49,16 @@ let statsLoopRunning = false;
 let lastStats = null;
 let lastAudioEnergy = null;
 let lastAudioEnergyTs = null;
-let childRetryTimeout = null;
-let childRetryDelay = 3000;
 let debugPanel = null;
 let latestNetworkLabel = 'Network: Unknown';
 let dataConn = null;
+let parentDataConns = new Map();
+let childCalls = new Map();
+let pendingChildCalls = [];
+let parentRetryTimeout = null;
+let parentRetryDelay = 3000;
+let silentStream = null;
+let silentAudioCtx = null;
 let lastCryTs = null;
 let lastCryInterval = null;
 let cryStartTs = null;
@@ -105,6 +110,58 @@ const CRY_CONFIG = Object.assign({
     noiseFloorWindowSeconds: 8,
     noiseFloorUpdateMarginDb: 3
 }, window.CRY_CONFIG || {});
+
+const STORAGE_PREFIX = 'kgbaby';
+const STORAGE_VERSION = 'v1';
+
+function storageKey(roomId, role) {
+    return `${STORAGE_PREFIX}:${STORAGE_VERSION}:${roomId}:${role}`;
+}
+
+function loadStoredState(roomId, role) {
+    if (!roomId || !role) return {};
+    try {
+        const raw = localStorage.getItem(storageKey(roomId, role));
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return {};
+        return parsed;
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveStoredState(roomId, role, patch) {
+    if (!roomId || !role) return;
+    try {
+        const existing = loadStoredState(roomId, role);
+        const next = Object.assign({}, existing, patch);
+        localStorage.setItem(storageKey(roomId, role), JSON.stringify(next));
+    } catch (e) {
+        // Ignore storage errors (private mode, quota, etc.)
+    }
+}
+
+function clearStoredLastCry(roomId, role) {
+    if (!roomId || !role) return;
+    try {
+        const existing = loadStoredState(roomId, role);
+        if (!existing || typeof existing !== 'object') {
+            localStorage.removeItem(storageKey(roomId, role));
+            return;
+        }
+        if (!Object.prototype.hasOwnProperty.call(existing, 'lastCryTs')) return;
+        const next = Object.assign({}, existing);
+        delete next.lastCryTs;
+        if (Object.keys(next).length === 0) {
+            localStorage.removeItem(storageKey(roomId, role));
+        } else {
+            localStorage.setItem(storageKey(roomId, role), JSON.stringify(next));
+        }
+    } catch (e) {
+        // Ignore storage errors
+    }
+}
 
 // Utility
 function log(msg, isError = false) {
@@ -196,10 +253,30 @@ async function startSession(selectedRole) {
             clearInterval(lastCryInterval);
             lastCryInterval = null;
         }
+        if (parentRetryTimeout) {
+            clearTimeout(parentRetryTimeout);
+            parentRetryTimeout = null;
+            parentRetryDelay = 3000;
+        }
         if (dataConn) {
             dataConn.close();
             dataConn = null;
         }
+        if (parentDataConns.size > 0) {
+            parentDataConns.forEach(conn => {
+                try { conn.close(); } catch (e) {}
+            });
+            parentDataConns.clear();
+        }
+        if (childCalls.size > 0) {
+            childCalls.forEach(call => {
+                try { call.close(); } catch (e) {}
+            });
+            childCalls.clear();
+        }
+        pendingChildCalls = [];
+        silentStream = null;
+        silentAudioCtx = null;
 
         const roomName = roomIdInput.value.trim();
         if (!roomName) {
@@ -242,6 +319,17 @@ async function startSession(selectedRole) {
             return;
         }
         
+        const stored = loadStoredState(roomId, role);
+        if (stored.childMode === 'transparency' || stored.childMode === 'minimal') {
+            childMode = stored.childMode;
+        }
+        if (typeof stored.micBoostEnabled === 'boolean') {
+            micBoostEnabled = stored.micBoostEnabled;
+        }
+        if (role === 'parent' && typeof stored.lastCryTs === 'number') {
+            lastCryTs = stored.lastCryTs;
+        }
+
         if (role === 'child') {
             initChild();
         } else {
@@ -289,9 +377,32 @@ function stopSession() {
     if (statsInterval) clearInterval(statsInterval);
     if (lastCryInterval) clearInterval(lastCryInterval);
     if (dataConn) dataConn.close();
+    if (parentDataConns.size > 0) {
+        parentDataConns.forEach(conn => {
+            try { conn.close(); } catch (e) {}
+        });
+        parentDataConns.clear();
+    }
+    if (childCalls.size > 0) {
+        childCalls.forEach(call => {
+            try { call.close(); } catch (e) {}
+        });
+        childCalls.clear();
+    }
+    pendingChildCalls = [];
+    if (parentRetryTimeout) clearTimeout(parentRetryTimeout);
+    parentRetryTimeout = null;
+    parentRetryDelay = 3000;
     stopVisualizer();
     teardownAudioGraph();
     if (audioCtx) audioCtx.close();
+    if (silentAudioCtx) silentAudioCtx.close();
+    silentStream = null;
+    silentAudioCtx = null;
+
+    if (role === 'parent') {
+        clearStoredLastCry(roomId, 'parent');
+    }
     
     location.reload();
 }
@@ -350,12 +461,14 @@ function updateSegmentedButtons() {
 function setParentMode(mode) {
     childMode = mode;
     updateSegmentedButtons();
+    saveStoredState(roomId, role, { childMode, micBoostEnabled, updatedAt: Date.now() });
     sendCurrentSettings();
 }
 
 function setParentMicBoost(enabled) {
     micBoostEnabled = enabled;
     updateSegmentedButtons();
+    saveStoredState(roomId, role, { childMode, micBoostEnabled, updatedAt: Date.now() });
     sendCurrentSettings();
 }
 
@@ -365,22 +478,40 @@ function toggleParentDim() {
     sendDimState();
 }
 
+function broadcastToParents(payload) {
+    if (parentDataConns.size === 0) return;
+    parentDataConns.forEach(conn => {
+        if (conn && conn.open) {
+            conn.send(payload);
+        }
+    });
+}
+
 function sendCurrentSettings() {
+    const payload = { type: 'settings', mode: childMode, micBoost: micBoostEnabled };
+    if (role === 'child') {
+        broadcastToParents(payload);
+        return;
+    }
     if (dataConn && dataConn.open) {
-        dataConn.send({ type: 'settings', mode: childMode, micBoost: micBoostEnabled });
+        dataConn.send(payload);
     }
 }
 
 function sendDimState() {
+    const payload = { type: 'dim', enabled: isDimmed };
+    if (role === 'child') {
+        broadcastToParents(payload);
+        return;
+    }
     if (dataConn && dataConn.open) {
-        dataConn.send({ type: 'dim', enabled: isDimmed });
+        dataConn.send(payload);
     }
 }
 
 function sendDimStateFromChild(enabled) {
-    if (dataConn && dataConn.open) {
-        dataConn.send({ type: 'dim', enabled, source: 'child' });
-    }
+    if (role !== 'child') return;
+    broadcastToParents({ type: 'dim', enabled, source: 'child' });
 }
 
 function setParentDimStateFromChild(enabled) {
@@ -397,6 +528,8 @@ function applyChildSettings(settings) {
         micBoostEnabled = settings.micBoost;
         applyMicBoost();
     }
+    saveStoredState(roomId, 'child', { childMode, micBoostEnabled, updatedAt: Date.now() });
+    sendCurrentSettings();
     if (childMode === 'transparency') {
         ensureTransmission(true);
         if (vadStatus) {
@@ -411,6 +544,23 @@ function applyChildSettings(settings) {
             vadStatus.textContent = isTransmitting ? 'Minimal Mode (Transmitting)' : 'Minimal Mode (Listening)';
             vadStatus.style.color = isTransmitting ? '#ff5252' : '#69f0ae';
         }
+    }
+}
+
+function applyParentSettings(settings) {
+    if (!settings) return;
+    let changed = false;
+    if (settings.mode === 'transparency' || settings.mode === 'minimal') {
+        childMode = settings.mode;
+        changed = true;
+    }
+    if (typeof settings.micBoost === 'boolean') {
+        micBoostEnabled = settings.micBoost;
+        changed = true;
+    }
+    if (changed) {
+        updateSegmentedButtons();
+        saveStoredState(roomId, 'parent', { childMode, micBoostEnabled, updatedAt: Date.now() });
     }
 }
 
@@ -444,6 +594,7 @@ function handleCryMessage(data) {
     if (!data || data.type !== 'cry') return;
     const ts = typeof data.ts === 'number' ? data.ts : Date.now();
     lastCryTs = ts;
+    saveStoredState(roomId, 'parent', { lastCryTs, updatedAt: Date.now() });
     updateLastCryDisplay();
     ensureLastCryInterval();
 }
@@ -451,6 +602,7 @@ function handleCryMessage(data) {
 function handleParentDataMessage(data) {
     if (!data || !data.type) return;
     if (data.type === 'cry') handleCryMessage(data);
+    if (data.type === 'settings') applyParentSettings(data);
     if (data.type === 'dim' && typeof data.enabled === 'boolean') {
         setParentDimStateFromChild(data.enabled);
     }
@@ -459,24 +611,106 @@ function handleParentDataMessage(data) {
 function handleChildDataMessage(data) {
     if (!data || !data.type) return;
     if (data.type === 'settings') applyChildSettings(data);
-    if (data.type === 'dim') setDimOverlay(!!data.enabled);
-}
-
-function sendCryEvent(ts) {
-    if (dataConn && dataConn.open) {
-        dataConn.send({ type: 'cry', ts });
+    if (data.type === 'dim' && typeof data.enabled === 'boolean') {
+        setDimOverlay(!!data.enabled);
+        sendDimState();
     }
 }
 
-function connectDataChannel() {
-    const targetId = `babymonitor-${roomId}-parent`;
+function sendCryEvent(ts) {
+    broadcastToParents({ type: 'cry', ts });
+}
+
+function connectDataChannelToChild() {
+    const targetId = `babymonitor-${roomId}-child`;
     if (dataConn && dataConn.open) return;
     if (dataConn) dataConn.close();
     dataConn = peer.connect(targetId, { reliable: true });
-    dataConn.on('open', () => log('Data channel open', false));
-    dataConn.on('data', handleChildDataMessage);
-    dataConn.on('error', (err) => log(`Data channel error: ${err.type || err}`, true));
-    dataConn.on('close', () => log('Data channel closed', true));
+    dataConn.on('open', () => {
+        log('Data channel open', false);
+        resetParentRetry();
+    });
+    dataConn.on('data', handleParentDataMessage);
+    dataConn.on('error', (err) => {
+        log(`Data channel error: ${err.type || err}`, true);
+        retryParentConnection();
+    });
+    dataConn.on('close', () => {
+        log('Data channel closed', true);
+        retryParentConnection();
+    });
+}
+
+function handleIncomingParentConnection(conn) {
+    if (parentDataConns.has(conn.peer)) {
+        try { parentDataConns.get(conn.peer).close(); } catch (e) {}
+    }
+    parentDataConns.set(conn.peer, conn);
+    conn.on('data', handleChildDataMessage);
+    conn.on('open', () => {
+        log('Parent data channel open', false);
+        sendCurrentSettings();
+        sendDimState();
+    });
+    conn.on('error', (err) => log(`Parent data channel error: ${err.type || err}`, true));
+    conn.on('close', () => {
+        parentDataConns.delete(conn.peer);
+        log('Parent data channel closed', true);
+    });
+}
+
+function updateChildConnectionState() {
+    if (role !== 'child') return;
+    setStatusText(childCalls.size > 0 ? 'connected' : 'waiting');
+}
+
+function answerPendingChildCalls() {
+    if (pendingChildCalls.length === 0) return;
+    const streamToSend = sendStream || localStream;
+    if (!streamToSend) return;
+    const queued = pendingChildCalls.slice();
+    pendingChildCalls = [];
+    queued.forEach(call => acceptChildCall(call, streamToSend));
+}
+
+function acceptChildCall(call, streamToSend) {
+    if (!call) return;
+    call.answer(streamToSend);
+    childCalls.set(call.peer, call);
+    updateChildConnectionState();
+    attachCallConnectionListeners(call, 'child');
+    startStatsLoop(call, 'outbound');
+
+    call.on('close', () => {
+        childCalls.delete(call.peer);
+        updateChildConnectionState();
+        if (statsInterval) clearInterval(statsInterval);
+    });
+
+    call.on('error', (err) => {
+        console.error('Call error:', err);
+        childCalls.delete(call.peer);
+        updateChildConnectionState();
+        if (statsInterval) clearInterval(statsInterval);
+    });
+}
+
+function handleChildCall(call) {
+    if (!call) return;
+    log(`Incoming Call from ${call.peer}`, false);
+    const streamToSend = sendStream || localStream;
+    if (!streamToSend) {
+        log('Mic not ready yet. Queuing call...', false);
+        pendingChildCalls.push(call);
+        call.on('close', () => {
+            pendingChildCalls = pendingChildCalls.filter(item => item !== call);
+        });
+        call.on('error', () => {
+            pendingChildCalls = pendingChildCalls.filter(item => item !== call);
+        });
+        return;
+    }
+    acceptChildCall(call, streamToSend);
 }
 
 // --- CHILD LOGIC ---
@@ -492,9 +726,11 @@ function initChild() {
         switchToMonitor();
         updateStatus(true); // Connected to signaling server
         setStatusText('waiting');
-        resetChildRetry();
         startStreaming();
     });
+
+    peer.on('call', (call) => handleChildCall(call));
+    peer.on('connection', (conn) => handleIncomingParentConnection(conn));
 
     peer.on('error', (err) => {
         console.error('Peer Error:', err.type, err);
@@ -502,11 +738,6 @@ function initChild() {
             log(`ID '${roomId}' taken.`, true);
             alert('Room Name Taken. Please choose another.');
             stopSession();
-        } else if (err.type === 'peer-unavailable') {
-            // Target not found, retry
-            log('Parent not found. Retrying...', false);
-            retryConnection();
-            setStatusText('waiting');
         } else if (err.type === 'network') {
             log('Network Error.', true);
         } else {
@@ -543,7 +774,7 @@ async function startStreaming() {
         
         setupVAD(localStream);
         setupTransmitChain(localStream);
-        connectToParent();
+        answerPendingChildCalls();
         
     } catch (err) {
         console.error('Failed to get media', err);
@@ -717,84 +948,69 @@ function maybeDetectCry(levelDb, now) {
     }
 }
 
-function connectToParent() {
+function getSilentStream() {
+    if (silentStream) return silentStream;
+    if (!silentAudioCtx) {
+        silentAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (silentAudioCtx.state === 'suspended') {
+        silentAudioCtx.resume();
+    }
+    const destination = silentAudioCtx.createMediaStreamDestination();
+    silentStream = destination.stream;
+    return silentStream;
+}
+
+function connectToChild() {
+    if (!peer) return;
     if (currentCall) {
         currentCall.close();
     }
 
-    const targetId = `babymonitor-${roomId}-parent`;
-    log(`Calling Parent (${targetId})...`, false);
-    
-    const call = peer.call(targetId, sendStream || localStream);
-    currentCall = call;
-    attachCallConnectionListeners(call, 'child');
-    startStatsLoop(call, 'outbound');
-    connectDataChannel();
+    const targetId = `babymonitor-${roomId}-child`;
+    log(`Calling Child (${targetId})...`, false);
 
-    call.on('close', () => {
-        log('Call lost/closed. Retrying...', true);
-        if (statsInterval) clearInterval(statsInterval);
-        retryConnection();
-    });
-
-    call.on('error', (err) => {
-        console.error('Call error:', err);
-        log(`Call Error: ${err.type}`, true);
-        if (statsInterval) clearInterval(statsInterval);
-        retryConnection();
-    });
+    const call = peer.call(targetId, getSilentStream());
+    handleParentCall(call);
 }
 
-function retryConnection() {
-    if (childRetryTimeout) return; // Already retrying
-    const delay = childRetryDelay;
+function retryParentConnection() {
+    if (parentRetryTimeout) return; // Already retrying
+    const delay = parentRetryDelay;
     log(`Reconnecting in ${Math.round(delay / 1000)}s...`, false);
-    childRetryTimeout = setTimeout(() => {
-        childRetryTimeout = null;
-        connectToParent();
-        childRetryDelay = Math.min(childRetryDelay * 2, 30000);
+    parentRetryTimeout = setTimeout(() => {
+        parentRetryTimeout = null;
+        connectToChild();
+        connectDataChannelToChild();
+        parentRetryDelay = Math.min(parentRetryDelay * 2, 30000);
     }, delay);
 }
 
-function resetChildRetry() {
-    if (childRetryTimeout) clearTimeout(childRetryTimeout);
-    childRetryTimeout = null;
-    childRetryDelay = 3000;
+function resetParentRetry() {
+    if (parentRetryTimeout) clearTimeout(parentRetryTimeout);
+    parentRetryTimeout = null;
+    parentRetryDelay = 3000;
 }
 
 // --- PARENT LOGIC ---
 function initParent() {
-    const myId = `babymonitor-${roomId}-parent`;
+    const parentSuffix = Math.random().toString(36).slice(2, 8);
+    const myId = `babymonitor-${roomId}-parent-${parentSuffix}`;
     log(`Creating Peer: ${myId}...`);
     
     if (peer) peer.destroy();
     peer = new Peer(myId, PEER_CONFIG);
 
     peer.on('open', (id) => {
-        log('Peer Open. Waiting for Child...', false);
+        log('Peer Open. Connecting to Child...', false);
         switchToMonitor();
         updateStatus(true); 
-        audioStatus.textContent = "Waiting for Child unit...";
+        audioStatus.textContent = "Connecting to Child unit...";
         setStatusText('waiting');
         btnListen.style.display = 'none';
-    });
-
-    peer.on('call', (call) => {
-        log(`Incoming Call from ${call.peer}`, false);
-        call.answer(); 
-        handleIncomingCall(call);
-    });
-
-    peer.on('connection', (conn) => {
-        if (dataConn) dataConn.close();
-        dataConn = conn;
-        dataConn.on('data', handleParentDataMessage);
-        dataConn.on('open', () => {
-            sendCurrentSettings();
-            sendDimState();
-        });
-        dataConn.on('error', (err) => log(`Data channel error: ${err.type || err}`, true));
-        dataConn.on('close', () => log('Data channel closed', true));
+        resetParentRetry();
+        connectToChild();
+        connectDataChannelToChild();
     });
     
     peer.on('error', (err) => {
@@ -806,6 +1022,7 @@ function initParent() {
         } else {
             log(`Peer Error: ${err.type}`, true);
             updateStatus(false);
+            retryParentConnection();
         }
     });
     
@@ -815,7 +1032,7 @@ function initParent() {
     });
 }
 
-function handleIncomingCall(call) {
+function handleParentCall(call) {
     if (currentCall) {
         currentCall.close();
     }
@@ -829,6 +1046,7 @@ function handleIncomingCall(call) {
         updateStatus(true, 'active');
         statusIndicator.style.backgroundColor = '#69f0ae';
         setStatusText('connected');
+        resetParentRetry();
         if (audioUnlocked) {
             startPlayback(remoteStream);
         } else {
@@ -846,11 +1064,13 @@ function handleIncomingCall(call) {
         setStatusText('waiting');
         pendingRemoteStream = null;
         if (statsInterval) clearInterval(statsInterval);
+        retryParentConnection();
     });
 
     call.on('error', (err) => {
         console.error('Call error:', err);
         if (statsInterval) clearInterval(statsInterval);
+        retryParentConnection();
     });
 }
 
@@ -1027,34 +1247,38 @@ function attachCallConnectionListeners(call, roleLabel) {
     pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
         log(`ICE state: ${state}`, state === 'failed');
-        if (state === 'connected' || state === 'completed') {
-            setStatusText('connected');
-        } else if (state === 'disconnected') {
-            setStatusText('waiting');
-        } else if (state === 'failed') {
-            setStatusText('disconnected');
+        if (roleLabel !== 'child') {
+            if (state === 'connected' || state === 'completed') {
+                setStatusText('connected');
+            } else if (state === 'disconnected') {
+                setStatusText('waiting');
+            } else if (state === 'failed') {
+                setStatusText('disconnected');
+            }
         }
         if (state === 'failed' || state === 'disconnected') {
-            audioStatus.textContent = "Connection unstable. Reconnecting...";
-            if (roleLabel === 'child') {
-                retryConnection();
+            if (roleLabel === 'parent' && audioStatus) {
+                audioStatus.textContent = "Connection unstable. Reconnecting...";
+                retryParentConnection();
             }
         }
     };
     pc.onconnectionstatechange = () => {
         const state = pc.connectionState;
         log(`Connection state: ${state}`, state === 'failed');
-        if (state === 'connected') {
-            setStatusText('connected');
-        } else if (state === 'disconnected') {
-            setStatusText('waiting');
-        } else if (state === 'failed') {
-            setStatusText('disconnected');
+        if (roleLabel !== 'child') {
+            if (state === 'connected') {
+                setStatusText('connected');
+            } else if (state === 'disconnected') {
+                setStatusText('waiting');
+            } else if (state === 'failed') {
+                setStatusText('disconnected');
+            }
         }
         if (state === 'failed') {
-            audioStatus.textContent = "Connection failed. Reconnecting...";
-            if (roleLabel === 'child') {
-                retryConnection();
+            if (roleLabel === 'parent' && audioStatus) {
+                audioStatus.textContent = "Connection failed. Reconnecting...";
+                retryParentConnection();
             }
         }
     };

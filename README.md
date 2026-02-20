@@ -12,6 +12,8 @@ A secure, zero-latency audio monitor that works over your local network using We
     - **Parent Unit**: Visual audio meter to see noise even when muted.
 - **Parent-Only Controls**: Mode (Transparency/Minimal), Mic Boost, and Dim Child Screen.
 - **Last Cry Indicator**: Parent shows “Last cry” based on sustained noise detection (This feature is WIP).
+- **Multiple Parents**: More than one parent device can connect to the same child (same room name).
+- **Local Settings**: Mode, mic boost, and last cry persist per room on each device.
 - **Loud Alert Output**: Parent audio is amplified for alerting (fidelity tradeoff).
 - **Reliability**: Auto-reconnection if Wi-Fi drops.
 
@@ -35,6 +37,13 @@ A secure, zero-latency audio monitor that works over your local network using We
    - **Parent Unit**: Wait for the status to show **Connected**. 
    - If audio doesn't play automatically, tap "Start Listening".
    - Use parent controls to switch **Transparency/Minimal**, toggle **Mic Boost**, or **Dim Child Screen**.
+
+## Multiple Parents
+
+- Use the same room name on each parent device.
+- The child unit is the host; each parent connects independently.
+- All parents can change settings; the last change wins.
+- More parents increases upload bandwidth/CPU load on the child device.
 
 ## Setup Guide (Text-Only)
 
@@ -118,6 +127,7 @@ TURN relays audio when direct connections are blocked. It requires a TURN server
 
 - **No Audio?**: Ensure the Parent unit has tapped "Start Listening" (browsers block auto-play audio).
 - **Too Quiet?**: Turn on **Mic Boost** and increase device volume; output is optimized for loud alerting.
+- **Settings Persist Locally**: Mode/mic boost and “last cry” are saved per room in browser storage. Use Stop & Exit to clear the last-cry timer on that device.
 - **Connection Failed?**: Refresh both pages and try a different Room Name.
 - **Echo?**: Ensure the Parent unit is not in the same room as the Child unit.
 
