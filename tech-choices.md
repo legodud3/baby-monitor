@@ -1,85 +1,72 @@
 # Tech Choices and Design Rationale (KGBaby v0.2)
 
-This document captures the architectural choices and the real-world reasons behind them.
+This document explains the technical and UX decisions in the current release.
 
 ## Core Architecture
 
 - **WebRTC via PeerJS (P2P)**
-  - Why: Lowest possible latency and avoids routing baby audio through a server. This is critical for trust and response time.
-  - Tradeoff: Requires signaling and can fail on some networks (TURN optional).
+  - Why: Keeps audio path direct for low latency and privacy.
+  - Tradeoff: Some networks still require TURN fallback.
 
 - **Browser-first, no build step**
-  - Why: Parents can open a URL on any device quickly; no install friction.
-  - Tradeoff: Mobile backgrounding and autoplay policies are stricter than native apps.
+  - Why: Faster setup on spare phones and tablets.
+  - Tradeoff: Mobile autoplay/background constraints are stricter than native apps.
 
-## Audio Capture and Processing
+## Audio and Detection
 
-- **Always-on transmission (no Minimal mode)**
-  - Why: Parents want to hear all vocalizations, including quiet grunts and whines. VAD gating missed “medium” sounds in practice.
-  - Tradeoff: Higher bandwidth and CPU usage, accepted for reliability.
+- **Always-on transmission**
+  - Why: Avoids missing quieter sounds that gate-based streaming can drop.
+  - Tradeoff: Higher continuous CPU/network usage.
 
-- **Echo cancellation enabled**
-  - Why: Real rooms contain reflective surfaces; enables better suppression of playback leaking into the mic.
-  - Tradeoff: Slightly alters audio fidelity, acceptable for monitoring.
+- **Room-optimized mic constraints** (`echoCancellation`, `noiseSuppression`, `autoGainControl`)
+  - Why: Better real-room pickup quality for nursery environments.
+  - Tradeoff: Slight coloration versus raw microphone fidelity.
 
-- **Auto-gain + noise suppression**
-  - Why: Baby sounds are often quiet at distance; auto-gain helps pick them up while noise suppression reduces ambient hums.
-  - Tradeoff: Can introduce pumping; acceptable compared to missed sounds.
+- **Fixed mic gain boost (3.0x)**
+  - Why: Simpler control surface for nighttime usage and reliable alert audibility.
+  - Tradeoff: Potential distortion under very loud input.
 
-- **Mic boost hard-coded to 3.0x**
-  - Why: In real usage it’s almost always on; removing UI reduces mistakes and simplifies control surface.
-  - Tradeoff: More distortion; acceptable for alerting use.
-
-- **VAD retained only for cry detection**
-  - Why: “Last cry” indicator is useful metadata even though we transmit continuously.
-  - Tradeoff: Small CPU cost; tuned with a longer interval (250ms) for efficiency.
+- **VAD-based elevated activity + infant states**
+  - Why: Parents get neutral state summaries instead of alarm-centric wording.
+  - How: Rolling noise floor drives two signals: elevated event recency and state transitions (`zzz`, `settled`, `stirring`, `needsCare`).
+  - Tradeoff: State is heuristic and may vary with room acoustics.
 
 ## White Noise Design
 
-- **White noise plays on child only and is suppressed from parent audio**
-  - Why: Parents want soothing sounds in the room without masking live audio in the parent feed.
-  - How: White noise is routed through the audio graph and subtracted from the outgoing stream, plus echo cancellation.
-  - Tradeoff: Cancellation is best-effort; some residual noise may remain depending on acoustics.
+- **Child-only playback with parent-stream suppression**
+  - Why: Keep soothing noise in-room while preserving parent monitoring clarity.
+  - How: White-noise track is injected into playback while an inverse gain is mixed into outbound stream.
+  - Tradeoff: Cancellation is best effort and acoustics dependent.
 
-- **Timer options: 30 / 60 / infinite**
-  - Why: Simple and matches real sleep routines without complex scheduling UI.
+- **Simple timer model (30 / 60 / infinite)**
+  - Why: Covers common routines with minimal cognitive load.
 
-- **Autoplay handling**
-  - Why: Mobile browsers often block audio playback until a gesture. A CTA on the child device avoids silent failures.
+- **Autoplay fallback CTA on child**
+  - Why: Handles mobile browser media-gesture restrictions.
 
 ## Power and Reliability
 
-- **Wake Lock API (screen)**
-  - Why: Prevents the screen from sleeping during monitoring sessions, which would stop audio capture.
-  - Tradeoff: Not supported everywhere; a hidden video loop is retained as a fallback.
+- **Wake Lock API + hidden video fallback**
+  - Why: Reduces risk of child device sleeping and stopping capture.
+  - Tradeoff: Not uniformly supported across browsers.
 
-- **True black dim overlay**
-  - Why: OLED power savings; avoids wasting battery on near-black pixels.
+- **Screen dim overlay**
+  - Why: Lowers light disturbance and helps OLED battery use.
 
-- **Local storage for settings**
-  - Why: Survives reloads in a real-world “nighttime” use case without a server.
-  - Tradeoff: Per-device state only; not synced across accounts.
+- **Auto reconnect flow**
+  - Why: Recovers from transient Wi-Fi drops without manual full reset.
 
-## Networking
+## UI and Interaction
 
-- **Local-network friendly defaults**
-  - Why: Typical use is within the same home or travel Wi‑Fi; reduces complexity.
-  - Tradeoff: Some constrained networks need TURN, which is optional and documented.
+- **State-forward redesign**
+  - Why: Nighttime monitoring benefits from calmer wording and clearer visual hierarchy.
+  - What changed: card-based layout, stronger status rail, improved button hierarchy, responsive spacing, and state chip styling.
 
-## UX Principles
+- **Parent-first control grouping**
+  - Why: White-noise, dim, and listen actions are clustered around the activity meter to reduce navigation effort.
 
-- **Minimal controls**
-  - Why: Night-time use on phones requires low cognitive load.
-  - Examples: Removal of Mic Boost toggle and Minimal mode.
+## Known Constraints
 
-- **Visual confirmation**
-  - Why: Parents need to know the connection is alive even when muted.
-  - Example: Audio meter and “Audio connected” status.
-
-## Open Constraints
-
-- **Mobile backgrounding**
-  - Limitation of browsers; even with Wake Lock, audio may stop if the tab is suspended.
-
-- **Cancellation quality**
-  - Best-effort suppression of white noise; depends on device mic/speaker placement.
+- **Mobile background suspension** can still pause mic/WebRTC despite wake-lock attempts.
+- **TURN infrastructure** is optional and external to this repository.
+- **State confidence** depends on device mic quality, placement, and ambient noise profile.

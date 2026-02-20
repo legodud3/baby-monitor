@@ -4,46 +4,54 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>KGBaby v0.2 - Secure Audio Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Sora:wght@500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <!-- PeerJS CDN -->
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
     <div id="app">
-        <!-- Landing Screen: Role Selection -->
         <div id="landing-screen" class="screen">
-            <h1>KGBaby v0.2</h1>
-            <p>Select your device role</p>
-            
-            <div class="role-selection">
-                <button id="btn-child" class="btn-large">
-                    <span class="icon">👶</span>
-                    Child Unit
-                </button>
-                <button id="btn-parent" class="btn-large">
-                    <span class="icon">👂</span>
-                    Parent Unit
-                </button>
-            </div>
+            <section class="hero-card">
+                <p class="eyebrow">Private audio baby monitor</p>
+                <h1>KGBaby v0.2</h1>
+                <p class="hero-copy">One tap to pair devices, then monitor with low-latency audio, white noise controls, and calm infant state updates.</p>
+            </section>
 
-            <div class="room-input-container">
-                <label for="room-id">Room Name</label>
-                <input type="text" id="room-id" placeholder="e.g. cabin123" autocapitalize="none">
-                <p class="hint">Enter the same room name on both devices.</p>
-            </div>
+            <section class="setup-card">
+                <p class="section-title">Choose this device</p>
+                <div class="role-selection">
+                    <button id="btn-child" class="btn-large" type="button">
+                        <span class="icon" aria-hidden="true">👶</span>
+                        <span class="role-title">Child Unit</span>
+                        <span class="role-meta">Mic in nursery</span>
+                    </button>
+                    <button id="btn-parent" class="btn-large" type="button">
+                        <span class="icon" aria-hidden="true">🎧</span>
+                        <span class="role-title">Parent Unit</span>
+                        <span class="role-meta">Live listening</span>
+                    </button>
+                </div>
 
-            <button id="btn-connect" class="btn-primary" disabled>Connect</button>
-            
-            <div id="debug-log" style="color: #ff5252; margin-top: 10px; font-size: 0.9rem; min-height: 20px;"></div>
+                <div class="room-input-container">
+                    <label for="room-id">Room Name</label>
+                    <input type="text" id="room-id" placeholder="e.g. cabin123" autocapitalize="none">
+                    <p class="hint">Use the same room name on both devices.</p>
+                </div>
+
+                <button id="btn-connect" class="btn-primary" disabled>Connect</button>
+            </section>
+
+            <div id="debug-log" class="debug-log"></div>
         </div>
 
-        <!-- Monitor Screen: Active Session -->
         <div id="monitor-screen" class="screen hidden">
-            <header>
+            <header class="monitor-header">
                 <div class="header-left">
-                    <div class="app-version">KGBaby v0.2</div>
+                    <p class="app-version">KGBaby v0.2</p>
                     <h2 id="role-display">Role</h2>
-                    <div id="last-cry" class="last-cry hidden">Last cry: --</div>
+                    <div id="state-summary" class="state-line hidden">State: Zzz</div>
                 </div>
                 <div class="status-wrap">
                     <div id="connection-status" class="status-indicator disconnected"></div>
@@ -51,35 +59,40 @@
                 </div>
             </header>
 
-            <main>
-                <!-- Child View Elements -->
-                <div id="child-controls" class="hidden">
-                    <div id="vad-status" class="status-message">Microphone Active</div>
-                    <div id="white-noise-status" class="white-noise-status hidden">
-                        White Noise Active <span id="white-noise-remaining" class="white-noise-remaining"></span>
-                    </div>
-                    <button id="white-noise-cta" class="btn-secondary hidden" type="button">Tap to enable white noise</button>
-                    
-                    <!-- Unified Visualizer (Same as Parent) -->
-                    <div class="visualizer-container">
-                        <div id="child-db-meter" class="meter-background">
-                            <div id="child-db-level" class="meter-fill"></div>
+            <main class="monitor-main">
+                <div id="child-controls" class="hidden role-stack">
+                    <section class="surface-card">
+                        <div id="vad-status" class="status-message">Microphone Active</div>
+                        <div id="white-noise-status" class="white-noise-status hidden">
+                            White noise active <span id="white-noise-remaining" class="white-noise-remaining"></span>
                         </div>
-                    </div>
-                    
-                    <div class="hint">Controls are on the Parent unit.</div>
+                        <button id="white-noise-cta" class="btn-secondary hidden" type="button">Tap to enable white noise</button>
+                    </section>
+
+                    <section class="surface-card">
+                        <p class="card-label">Room activity</p>
+                        <div class="visualizer-container">
+                            <div id="child-db-meter" class="meter-background">
+                                <div id="child-db-level" class="meter-fill"></div>
+                            </div>
+                        </div>
+                        <p class="hint">Controls are available from the Parent Unit.</p>
+                    </section>
                 </div>
 
-                <!-- Parent View Elements -->
-                <div id="parent-controls" class="hidden">
-                    <div class="visualizer-container">
-                        <div id="parent-db-meter" class="meter-background">
-                            <div id="parent-db-level" class="meter-fill"></div>
+                <div id="parent-controls" class="hidden role-stack">
+                    <section class="surface-card">
+                        <p class="card-label">Live room activity</p>
+                        <div class="visualizer-container">
+                            <div id="parent-db-meter" class="meter-background">
+                                <div id="parent-db-level" class="meter-fill"></div>
+                            </div>
                         </div>
-                    </div>
+                    </section>
 
-                    <div class="control-group">
-                        <label>White Noise</label>
+                    <section class="surface-card control-group">
+                        <p class="card-label">Comfort controls</p>
+                        <label>White noise</label>
                         <button id="white-noise-toggle" class="btn-secondary" type="button">Start White Noise</button>
                         <label for="white-noise-volume">Volume</label>
                         <input id="white-noise-volume" type="range" min="0" max="100" value="50">
@@ -89,16 +102,15 @@
                             <option value="3600000">60 min</option>
                             <option value="infinite" selected>Infinite</option>
                         </select>
-                    </div>
+                    </section>
 
                     <button id="btn-dim-parent" class="btn-secondary" type="button">Dim Child Screen</button>
-
                     <audio id="remote-audio" autoplay playsinline style="display:none;" muted></audio>
                     <button id="btn-listen" class="btn-primary">Start Listening</button>
                     <div id="audio-status">Waiting for audio...</div>
                 </div>
             </main>
-            
+
             <audio id="white-noise-audio" preload="auto" loop playsinline style="display:none;">
                 <source src="assets/audio/white-noise.mp3" type="audio/mpeg">
             </audio>
@@ -107,18 +119,16 @@
                 <button id="btn-stop" class="btn-danger">Stop & Exit</button>
             </footer>
         </div>
-        
-        <!-- Dim Overlay for Child Unit -->
+
         <div id="dim-overlay" class="hidden">
             <p>Double-tap to wake</p>
         </div>
-        
-        <!-- IOS WAKE LOCK HACK: Hidden video loop to keep browser/network active -->
+
         <video id="wake-lock-video" playsinline loop muted width="1" height="1" style="opacity: 0; pointer-events: none; position: absolute;">
             <source src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAC5tZGF0DQoAAAAADGdmZDL3AgAAAAAAB5ZtZnJhAAAAAAAAAAH3bWZoZAAAAAB3d3d3AAAAAAA=" type="video/mp4">
         </video>
     </div>
-    
+
     <script src="cry-config.js"></script>
     <script src="network-config.js"></script>
     <script src="script.js"></script>

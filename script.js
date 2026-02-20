@@ -16,7 +16,7 @@ const audioStatus = document.getElementById('audio-status');
 const vadStatus = document.getElementById('vad-status');
 const wakeLockVideo = document.getElementById('wake-lock-video');
 const debugLog = document.getElementById('debug-log');
-const lastCryEl = document.getElementById('last-cry');
+const stateSummaryEl = document.getElementById('state-summary');
 const statusText = document.getElementById('status-text');
 const btnDimParent = document.getElementById('btn-dim-parent');
 const whiteNoiseToggle = document.getElementById('white-noise-toggle');
@@ -63,11 +63,14 @@ let parentRetryDelay = 3000;
 let peerReconnectTimer = null;
 let silentStream = null;
 let silentAudioCtx = null;
-let lastCryTs = null;
-let lastCryInterval = null;
-let cryStartTs = null;
-let cryCooldownUntil = 0;
+let lastElevatedTs = null;
+let infantState = 'zzz';
+let stateSummaryInterval = null;
+let elevatedStartTsForAlert = null;
+let elevatedCooldownUntil = 0;
 let noiseFloorDb = null;
+let elevatedStartTs = null;
+let currentInfantState = 'zzz';
 let lastVadSampleTs = null;
 let lastVisualizerPrefix = null;
 let sendStream = null;
@@ -126,6 +129,13 @@ const CRY_CONFIG = Object.assign({
 }, window.CRY_CONFIG || {});
 const VAD_MIN_DB_ABOVE_NOISE = Math.max(6, CRY_CONFIG.minDbAboveNoise - 4);
 const WHITE_NOISE_CANCEL_GAIN = 1.0;
+const STATE_THRESHOLDS = {
+    stirringDbAboveNoise: Math.max(4, VAD_MIN_DB_ABOVE_NOISE - 2),
+    needsCareDbAboveNoise: CRY_CONFIG.minDbAboveNoise,
+    settleSeconds: 30,
+    stirringSeconds: 2,
+    needsCareSustainedSeconds: CRY_CONFIG.sustainedSeconds
+};
 
 const STORAGE_PREFIX = 'kgbaby';
 const STORAGE_VERSION = 'v1';
@@ -158,7 +168,7 @@ function saveStoredState(roomId, role, patch) {
     }
 }
 
-function clearStoredLastCry(roomId, role) {
+function clearStoredElevatedTimestamp(roomId, role) {
     if (!roomId || !role) return;
     try {
         const existing = loadStoredState(roomId, role);
@@ -166,9 +176,11 @@ function clearStoredLastCry(roomId, role) {
             localStorage.removeItem(storageKey(roomId, role));
             return;
         }
-        if (!Object.prototype.hasOwnProperty.call(existing, 'lastCryTs')) return;
+        if (!Object.prototype.hasOwnProperty.call(existing, 'lastElevatedTs') &&
+            !Object.prototype.hasOwnProperty.call(existing, 'lastCryTs')) return;
         const next = Object.assign({}, existing);
-        delete next.lastCryTs;
+        delete next.lastElevatedTs;
+        delete next.lastCryTs; // Backward compatibility from older versions
         if (Object.keys(next).length === 0) {
             localStorage.removeItem(storageKey(roomId, role));
         } else {
@@ -274,15 +286,18 @@ async function startSession(selectedRole) {
         audioUnlocked = false;
         pendingRemoteStream = null;
         isDimmed = false;
-        lastCryTs = null;
-        cryStartTs = null;
-        cryCooldownUntil = 0;
+        lastElevatedTs = null;
+        infantState = 'zzz';
+        elevatedStartTsForAlert = null;
+        elevatedCooldownUntil = 0;
         noiseFloorDb = null;
+        elevatedStartTs = null;
+        currentInfantState = 'zzz';
         lastVadSampleTs = null;
         gateStartTs = null;
-        if (lastCryInterval) {
-            clearInterval(lastCryInterval);
-            lastCryInterval = null;
+        if (stateSummaryInterval) {
+            clearInterval(stateSummaryInterval);
+            stateSummaryInterval = null;
         }
         if (parentRetryTimeout) {
             clearTimeout(parentRetryTimeout);
@@ -351,8 +366,13 @@ async function startSession(selectedRole) {
         }
         
         const stored = loadStoredState(roomId, role);
-        if (role === 'parent' && typeof stored.lastCryTs === 'number') {
-            lastCryTs = stored.lastCryTs;
+        if (role === 'parent' && typeof stored.lastElevatedTs === 'number') {
+            lastElevatedTs = stored.lastElevatedTs;
+        } else if (role === 'parent' && typeof stored.lastCryTs === 'number') {
+            lastElevatedTs = stored.lastCryTs; // Backward compatibility from older versions
+        }
+        if (role === 'parent' && typeof stored.infantState === 'string') {
+            infantState = stored.infantState;
         }
         if (typeof stored.whiteNoiseEnabled === 'boolean') {
             whiteNoiseEnabled = stored.whiteNoiseEnabled;
@@ -396,17 +416,17 @@ function switchToMonitor() {
     roleDisplay.textContent = role === 'child' ? 'Child Unit' : 'Parent Unit';
     if (role === 'child') {
         childControls.classList.remove('hidden');
-        if (lastCryEl) lastCryEl.classList.add('hidden');
+        if (stateSummaryEl) stateSummaryEl.classList.add('hidden');
         if (vadStatus) {
             vadStatus.textContent = 'Microphone Active';
             vadStatus.style.color = '#69f0ae';
         }
     } else {
         parentControls.classList.remove('hidden');
-        if (lastCryEl) {
-            lastCryEl.classList.remove('hidden');
-            updateLastCryDisplay();
-            ensureLastCryInterval();
+        if (stateSummaryEl) {
+            stateSummaryEl.classList.remove('hidden');
+            updateStateSummaryDisplay();
+            ensureStateSummaryInterval();
         }
         updateSegmentedButtons();
     }
@@ -422,7 +442,7 @@ function stopSession() {
     if (reconnectInterval) clearInterval(reconnectInterval);
     if (vadInterval) clearInterval(vadInterval);
     if (statsInterval) clearInterval(statsInterval);
-    if (lastCryInterval) clearInterval(lastCryInterval);
+    if (stateSummaryInterval) clearInterval(stateSummaryInterval);
     if (dataConn) dataConn.close();
     if (parentDataConns.size > 0) {
         parentDataConns.forEach(conn => {
@@ -465,7 +485,7 @@ function stopSession() {
     silentAudioCtx = null;
 
     if (role === 'parent') {
-        clearStoredLastCry(roomId, 'parent');
+        clearStoredElevatedTimestamp(roomId, 'parent');
     }
     
     location.reload();
@@ -819,18 +839,38 @@ function setParentDimStateFromChild(enabled) {
 }
 
 
-function ensureLastCryInterval() {
-    if (lastCryInterval) return;
-    lastCryInterval = setInterval(updateLastCryDisplay, 10000);
+function ensureStateSummaryInterval() {
+    if (stateSummaryInterval) return;
+    stateSummaryInterval = setInterval(updateStateSummaryDisplay, 10000);
 }
 
-function updateLastCryDisplay() {
-    if (!lastCryEl) return;
-    if (!lastCryTs) {
-        lastCryEl.textContent = 'Last cry: --';
+function getInfantStateLabel(state) {
+    const labels = {
+        zzz: 'Zzz',
+        settled: 'Settled',
+        stirring: 'Stirring',
+        needsCare: 'Needs attention'
+    };
+    return labels[state] || labels.zzz;
+}
+
+function applyStateSummaryStyle() {
+    if (!stateSummaryEl) return;
+    stateSummaryEl.classList.remove('state-zzz', 'state-settled', 'state-stirring', 'state-needs-care');
+    if (infantState === 'needsCare') stateSummaryEl.classList.add('state-needs-care');
+    else if (infantState === 'stirring') stateSummaryEl.classList.add('state-stirring');
+    else if (infantState === 'settled') stateSummaryEl.classList.add('state-settled');
+    else stateSummaryEl.classList.add('state-zzz');
+}
+
+function updateStateSummaryDisplay() {
+    if (!stateSummaryEl) return;
+    applyStateSummaryStyle();
+    if (!lastElevatedTs) {
+        stateSummaryEl.textContent = `State: ${getInfantStateLabel(infantState)}`;
         return;
     }
-    const elapsedSec = Math.floor((Date.now() - lastCryTs) / 1000);
+    const elapsedSec = Math.floor((Date.now() - lastElevatedTs) / 1000);
     let text = 'just now';
     if (elapsedSec >= 10 && elapsedSec < 60) {
         text = `${elapsedSec}s ago`;
@@ -842,21 +882,32 @@ function updateLastCryDisplay() {
         const mins = Math.floor((elapsedSec % 3600) / 60);
         text = `${hours}h ${mins}m ago`;
     }
-    lastCryEl.textContent = `Last cry: ${text}`;
+    stateSummaryEl.textContent = `State: ${getInfantStateLabel(infantState)} · Elevated ${text}`;
 }
 
-function handleCryMessage(data) {
-    if (!data || data.type !== 'cry') return;
+function handleElevatedAudioMessage(data) {
+    if (!data || data.type !== 'elevated') return;
     const ts = typeof data.ts === 'number' ? data.ts : Date.now();
-    lastCryTs = ts;
-    saveStoredState(roomId, 'parent', { lastCryTs, updatedAt: Date.now() });
-    updateLastCryDisplay();
-    ensureLastCryInterval();
+    lastElevatedTs = ts;
+    infantState = 'needsCare';
+    saveStoredState(roomId, 'parent', { lastElevatedTs, infantState, updatedAt: Date.now() });
+    updateStateSummaryDisplay();
+    ensureStateSummaryInterval();
+}
+
+function handleStateMessage(data) {
+    if (!data || data.type !== 'state') return;
+    if (typeof data.state !== 'string') return;
+    infantState = data.state;
+    saveStoredState(roomId, 'parent', { infantState, updatedAt: Date.now() });
+    updateStateSummaryDisplay();
+    ensureStateSummaryInterval();
 }
 
 function handleParentDataMessage(data) {
     if (!data || !data.type) return;
-    if (data.type === 'cry') handleCryMessage(data);
+    if (data.type === 'elevated' || data.type === 'cry') handleElevatedAudioMessage({ ...data, type: 'elevated' });
+    if (data.type === 'state') handleStateMessage(data);
     if (data.type === 'dim' && typeof data.enabled === 'boolean') {
         setParentDimStateFromChild(data.enabled);
     }
@@ -872,8 +923,12 @@ function handleChildDataMessage(data) {
     if (data.type === 'white_noise') handleWhiteNoiseMessage(data);
 }
 
-function sendCryEvent(ts) {
-    broadcastToParents({ type: 'cry', ts });
+function sendElevatedEvent(ts) {
+    broadcastToParents({ type: 'elevated', ts });
+}
+
+function sendStateEvent(state, confidence) {
+    broadcastToParents({ type: 'state', state, confidence, ts: Date.now() });
 }
 
 function connectDataChannelToChild() {
@@ -1114,9 +1169,13 @@ function setupVAD(stream) {
         lastVadSampleTs = now;
 
         updateNoiseFloor(levelDb, dt);
-        maybeDetectCry(levelDb, now);
+        maybeDetectElevatedActivity(levelDb, now);
+        updateInfantState(levelDb, now);
         
         const vadThresholdDb = noiseFloorDb !== null ? noiseFloorDb + VAD_MIN_DB_ABOVE_NOISE : null;
+        if (vadThresholdDb !== null && levelDb >= vadThresholdDb) {
+            lastNoiseTime = now;
+        }
         if (logCounter % 50 === 0) {
             console.log(`VAD: dB=${levelDb.toFixed(1)}, Threshold=${vadThresholdDb !== null ? vadThresholdDb.toFixed(1) : 'n/a'}, Active=${isTransmitting}`);
         }
@@ -1185,27 +1244,65 @@ function updateNoiseFloor(levelDb, dtMs) {
     }
 }
 
-function maybeDetectCry(levelDb, now) {
+function maybeDetectElevatedActivity(levelDb, now) {
     if (!Number.isFinite(levelDb) || noiseFloorDb === null) return;
-    if (now < cryCooldownUntil) {
-        cryStartTs = null;
+    if (now < elevatedCooldownUntil) {
+        elevatedStartTsForAlert = null;
         return;
     }
     const thresholdDb = noiseFloorDb + CRY_CONFIG.minDbAboveNoise;
     if (levelDb >= thresholdDb) {
-        if (!cryStartTs) cryStartTs = now;
+        if (!elevatedStartTsForAlert) elevatedStartTsForAlert = now;
         const sustainMs = CRY_CONFIG.sustainedSeconds * 1000;
-        if (now - cryStartTs >= sustainMs) {
-            sendCryEvent(now);
-            log('Cry detected', false);
-            cryCooldownUntil = now + (CRY_CONFIG.cooldownSeconds * 1000);
-            cryStartTs = null;
+        if (now - elevatedStartTsForAlert >= sustainMs) {
+            sendElevatedEvent(now);
+            log('Elevated audio detected', false);
+            elevatedCooldownUntil = now + (CRY_CONFIG.cooldownSeconds * 1000);
+            elevatedStartTsForAlert = null;
         }
     } else {
-        cryStartTs = null;
+        elevatedStartTsForAlert = null;
     }
 }
 
+
+
+function setChildState(nextState, confidence = null) {
+    if (role !== 'child') return;
+    if (currentInfantState === nextState) return;
+    currentInfantState = nextState;
+    sendStateEvent(nextState, confidence);
+}
+
+function updateInfantState(levelDb, now) {
+    if (!Number.isFinite(levelDb) || noiseFloorDb === null) return;
+    const above = levelDb - noiseFloorDb;
+
+    if (above >= STATE_THRESHOLDS.needsCareDbAboveNoise) {
+        if (!elevatedStartTs) elevatedStartTs = now;
+        const elapsed = now - elevatedStartTs;
+        if (elapsed >= STATE_THRESHOLDS.needsCareSustainedSeconds * 1000) {
+            setChildState('needsCare', 0.9);
+        } else if (elapsed >= STATE_THRESHOLDS.stirringSeconds * 1000) {
+            setChildState('stirring', 0.7);
+        }
+        return;
+    }
+
+    elevatedStartTs = null;
+
+    if (above >= STATE_THRESHOLDS.stirringDbAboveNoise) {
+        setChildState('stirring', 0.6);
+        return;
+    }
+
+    const sinceLastNoise = now - lastNoiseTime;
+    if (sinceLastNoise >= STATE_THRESHOLDS.settleSeconds * 1000) {
+        setChildState('zzz', 0.8);
+    } else {
+        setChildState('settled', 0.65);
+    }
+}
 function getSilentStream() {
     if (silentStream) return silentStream;
     if (!silentAudioCtx) {

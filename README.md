@@ -1,97 +1,53 @@
-# KGBaby v0.2 - Private Browser-Based Baby Monitor
+# KGBaby v0.2 - Private Browser Baby Monitor
 
-A secure, zero-latency audio monitor that works over your local network using WebRTC (PeerJS). Designed for travel or backup use.
+A secure, low-latency audio monitor that runs in the browser using direct WebRTC (PeerJS) connections.
 
 ## Features
 
-- **Zero Latency**: Direct Peer-to-Peer (P2P) audio streaming.
-- **Privacy First**: Audio never touches a cloud server (except for the initial handshake).
-- **Dark Mode**: OLED-friendly interface for use in dark rooms.
-- **Smart Audio**:
-    - **Child Unit**: Noise suppression, echo cancellation, and auto-gain for real rooms.
-    - **Parent Unit**: Visual audio meter to see noise even when muted.
-- **Parent-Only Controls**: White Noise and Dim Child Screen.
-- **White Noise**: Parent can start a looped white noise track on the child device with volume and a 30/60/Infinite timer (suppressed from parent audio).
-- **Last Cry Indicator**: Parent shows “Last cry” based on sustained noise detection (This feature is WIP).
-- **Multiple Parents**: More than one parent device can connect to the same child (same room name).
-- **Local Settings**: White noise settings and last cry persist per room on each device.
-- **Loud Alert Output**: Parent audio is amplified for alerting (fidelity tradeoff).
-- **Reliability**: Auto-reconnection if Wi-Fi drops.
+- **Direct P2P Audio**: Child-to-parent streaming without routing live audio through an app server.
+- **State-First Monitoring**: Parent view shows calm infant state labels (`Zzz`, `Settled`, `Stirring`, `Needs attention`) plus recent elevated-activity timing.
+- **Redesigned Mobile UI**: Card-based controls, stronger status visibility, and improved readability in low-light rooms.
+- **Parent Controls**: Trigger child white noise, set timer (30/60/infinite), adjust volume, and dim/wake child screen.
+- **Multiple Parents**: More than one parent device can join the same room.
+- **Local Persistence**: White-noise and infant-state context are stored per room in local browser storage.
+- **Reliability Guards**: Auto-reconnect handling, wake-lock support, and debug overlay (`?debug=1`).
 
-## How to Use
+## Quick Start
 
-1. **Open the App**: 
-   - Open legodud3.github.io/kgbaby on both the child & parent device browsers
-   - You may also host it yourself on GitHub Pages by cloning the repo or open `index.html` locally.
-   - **HTTPS is required** for microphone access (unless on `localhost`).
-
-2. **Select Role**:
-   - **Device 1 (Baby's Room)**: Select **Child Unit**.
-   - **Device 2 (Parent)**: Select **Parent Unit**.
-
-3. **Enter Room Name**:
-   - Enter the **same** unique room name on both devices (e.g., `cabin123`).
-
-4. **Start Monitoring**:
-   - Tap **Connect** on both devices.
-   - **Child Unit**: Allow microphone access.
-   - **Parent Unit**: Wait for the status to show **Connected**. 
-   - If audio doesn't play automatically, tap "Start Listening".
-   - Use parent controls to start **White Noise** or **Dim Child Screen**.
-
-## Multiple Parents
-
-- Use the same room name on each parent device.
-- The child unit is the host; each parent connects independently.
-- All parents can change settings; the last change wins.
-- More parents increases upload bandwidth/CPU load on the child device.
-
-## Setup Guide (Text-Only)
-
-Use this section as your basic setup checklist (screenshots/video can be added here later).
-
-1. **Place the Child Device**
-   - Put it 1–3 ft from the baby with the microphone unobstructed.
-   - Avoid placing it behind pillows, blankets, or inside cribs where sound is muffled.
-
-2. **Keep the App in the Foreground**
-   - On iOS, use **Guided Access** to prevent switching away.
-   - On Android, keep the screen on or use the built-in **Dim Child Screen**.
-
-3. **Always-On Audio**
-   - The child unit always transmits audio for maximum clarity (no Minimal mode).
-
-4. **Boost When Needed**
-   - If the parent audio is too quiet, raise device volume (audio is amplified by default).
+1. Open the app on two devices.
+2. Choose `Child Unit` on the nursery device and `Parent Unit` on the listening device.
+3. Enter the same room name on both devices.
+4. Tap `Connect`.
+5. On parent, tap `Start Listening` if autoplay is blocked.
 
 ## Recommended Setup
 
-- **Distance**: Keep the child device close (1–3 ft) to avoid missing quiet sounds.
-- **Power**: Plug in the child device for overnight use.
-- **Audio Capture**: If the phone mic is too weak at distance, use an external mic (USB‑C/Lightning lavalier or clip‑on).
-- **Network**: Same Wi‑Fi is ideal; avoid client‑isolated guest networks.
+- Keep the child device 1-3 ft from the crib with the mic unobstructed.
+- Keep child device plugged in for long sessions.
+- Keep app in foreground (mobile browsers may suspend capture in background).
+- Use same Wi-Fi when possible for best peer connectivity.
 
-## Tuning Cry Detection
+## Tuning Activity Detection
 
-Adjust cry sensitivity in `cry-config.js`:
+Edit `cry-config.js`:
 
 ```js
 window.CRY_CONFIG = {
-  sustainedSeconds: 1.5,        // How long sound must stay above threshold
-  minDbAboveNoise: 12,          // dB above rolling noise floor
-  cooldownSeconds: 10,          // Minimum time between cry events
-  noiseFloorWindowSeconds: 8,   // Rolling window for noise floor tracking
-  noiseFloorUpdateMarginDb: 3   // Update floor only when near it
+  sustainedSeconds: 1.5,
+  minDbAboveNoise: 12,
+  cooldownSeconds: 10,
+  noiseFloorWindowSeconds: 8,
+  noiseFloorUpdateMarginDb: 3
 };
 ```
 
-## Debug Overlay
+Notes:
+- `minDbAboveNoise` and `sustainedSeconds` are the primary sensitivity controls.
+- Elevated events feed parent recency text and influence state transitions.
 
-Append `?debug=1` to the URL to see live network stats (bitrate, RTT, jitter, loss).
+## Optional Network Tuning
 
-## Optional Low Bandwidth Mode
-
-Edit `network-config.js` to lower bitrate targets:
+Edit `network-config.js` for lower-bandwidth environments:
 
 ```js
 window.NETWORK_CONFIG = {
@@ -101,9 +57,9 @@ window.NETWORK_CONFIG = {
 };
 ```
 
-## Optional TURN (Hard Networks)
+## Optional TURN
 
-If direct P2P fails on certain networks, you can supply TURN credentials:
+If direct peer connection fails on restrictive networks:
 
 ```html
 <script>
@@ -115,43 +71,22 @@ If direct P2P fails on certain networks, you can supply TURN credentials:
 </script>
 ```
 
-TURN relays audio when direct connections are blocked. It requires a TURN server and usually incurs bandwidth costs.
-
-## Requirements
-
-- Two devices with a modern browser (Chrome, Safari, Firefox).
-- Both devices connected to the internet (for the initial handshake) or same LAN.
-- **HTTPS** context (or `localhost`).
-
 ## Troubleshooting
 
-- **No Audio?**: Ensure the Parent unit has tapped "Start Listening" (browsers block auto-play audio).
-- **White Noise Won't Start?**: On the child device, tap “Tap to enable white noise” when prompted (autoplay restrictions).
-- **Too Quiet?**: Increase device volume; output is optimized for loud alerting.
-- **Settings Persist Locally**: White noise settings and “last cry” are saved per room in browser storage. Use Stop & Exit to clear the last-cry timer on that device.
-- **Connection Failed?**: Refresh both pages and try a different Room Name.
-- **Echo?**: Ensure the Parent unit is not in the same room as the Child unit.
-
-## Limitations
-
-- **Backgrounding Stops Audio**: Mobile browsers often pause microphone and WebRTC when the app is not in the foreground.
-- **Network Constraints**: Some networks block direct P2P connections; TURN is not enabled by default.
-- **Device Mic Variability**: Some phones may not pick up quiet sounds at a distance without an external mic.
+- **No audio**: Tap `Start Listening` on parent (autoplay policy).
+- **White noise not playing**: On child, tap `Tap to enable white noise`.
+- **Quiet output**: Raise device volume on parent.
+- **Unstable connection**: Refresh both devices and rejoin with same room name.
+- **Echo**: Keep parent device out of the nursery.
 
 ## Development
 
-Runs with zero build steps.
+No build step required.
 
 ```bash
-# Serve locally
 npx serve
 ```
 
-## Audio Assets
-
-- `assets/audio/white-noise.mp3` is generated locally using FFmpeg’s `anoisesrc` noise source.
-- If you want a CC0 external source, replace this file with a white-noise sample (e.g., the SignatureSounds CC0 pack referenced in planning).
-
 ## License
 
-MIT. See `LICENSE`.
+MIT (`LICENSE`).
