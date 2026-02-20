@@ -5,18 +5,18 @@ A secure, low-latency audio monitor that runs in the browser using direct WebRTC
 ## Features
 
 - **Direct P2P Audio**: Child-to-parent streaming without routing live audio through an app server.
-- **State-First Monitoring**: Parent view shows calm infant state labels (`Zzz`, `Settled`, `Stirring`, `Needs attention`) plus recent elevated-activity timing.
+- **State-First Monitoring**: Parent view shows calm baby-state labels (`😴 Zzz`, `🙂 Settled`, `😣 Stirring`, `🚨 Needs attention`) plus `Last elevated ...` timing.
 - **Redesigned Mobile UI**: Card-based controls, stronger status visibility, and improved readability in low-light rooms.
 - **Parent Controls**: Trigger child white noise, set timer (30/60/infinite), adjust volume, and dim/wake child screen.
-- **Multiple Parents**: More than one parent device can join the same room.
-- **Local Persistence**: White-noise and infant-state context are stored per room in local browser storage.
+- **Multiple Parents**: More than one parent device can join with the same baby name.
+- **Local Persistence**: White-noise and infant-state context are stored per baby session in local browser storage.
 - **Reliability Guards**: Auto-reconnect handling, wake-lock support, and debug overlay (`?debug=1`).
 
 ## Quick Start
 
 1. Open the app on two devices.
 2. Choose `Child Unit` on the nursery device and `Parent Unit` on the listening device.
-3. Enter the same room name on both devices.
+3. Enter the same baby name on both devices.
 4. Tap `Connect`.
 5. On parent, tap `Start Listening` if autoplay is blocked.
 
@@ -37,12 +37,16 @@ window.CRY_CONFIG = {
   minDbAboveNoise: 12,
   cooldownSeconds: 10,
   noiseFloorWindowSeconds: 8,
-  noiseFloorUpdateMarginDb: 3
+  noiseFloorUpdateMarginDb: 3,
+  needsCareSustainedSeconds: 120,
+  nonCriticalStateMinHoldSeconds: 60
 };
 ```
 
 Notes:
-- `minDbAboveNoise` and `sustainedSeconds` are the primary sensitivity controls.
+- `minDbAboveNoise` controls loudness sensitivity for elevated events.
+- `needsCareSustainedSeconds` controls how long loud audio must continue before `Needs attention`.
+- `nonCriticalStateMinHoldSeconds` controls how often non-critical states can change.
 - Elevated events feed parent recency text and influence state transitions.
 
 ## Optional Network Tuning
@@ -76,7 +80,7 @@ If direct peer connection fails on restrictive networks:
 - **No audio**: Tap `Start Listening` on parent (autoplay policy).
 - **White noise not playing**: On child, tap `Tap to enable white noise`.
 - **Quiet output**: Raise device volume on parent.
-- **Unstable connection**: Refresh both devices and rejoin with same room name.
+- **Unstable connection**: Refresh both devices and rejoin with the same baby name.
 - **Echo**: Keep parent device out of the nursery.
 
 ## Development

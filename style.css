@@ -284,11 +284,20 @@ h2 {
 .state-line {
     font-size: 0.88rem;
     color: #dbf7ff;
-    padding: 6px 10px;
+    padding: 6px 12px;
     border-radius: 999px;
     background: rgba(121, 225, 255, 0.12);
     border: 1px solid rgba(121, 225, 255, 0.26);
     width: fit-content;
+    min-width: 215px;
+    min-height: 34px;
+    line-height: 20px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .state-line.state-zzz,
@@ -494,6 +503,12 @@ footer {
     .monitor-header {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .state-line {
+        width: 100%;
+        min-width: 100%;
+        font-size: 0.84rem;
     }
 }
 

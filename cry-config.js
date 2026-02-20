@@ -3,5 +3,7 @@ window.CRY_CONFIG = {
     minDbAboveNoise: 12,
     cooldownSeconds: 10,
     noiseFloorWindowSeconds: 8,
-    noiseFloorUpdateMarginDb: 3
+    noiseFloorUpdateMarginDb: 3,
+    needsCareSustainedSeconds: 120,
+    nonCriticalStateMinHoldSeconds: 60
 };

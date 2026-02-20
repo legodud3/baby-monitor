@@ -31,6 +31,7 @@ const whiteNoiseCta = document.getElementById('white-noise-cta');
 let role = null;
 let selectedRole = null;
 let roomId = null;
+let displayBabyName = '';
 let peer = null;
 let currentCall = null;
 let localStream = null;
@@ -71,6 +72,7 @@ let elevatedCooldownUntil = 0;
 let noiseFloorDb = null;
 let elevatedStartTs = null;
 let currentInfantState = 'zzz';
+let lastNonCriticalStateSentAt = 0;
 let lastVadSampleTs = null;
 let lastVisualizerPrefix = null;
 let sendStream = null;
@@ -125,7 +127,9 @@ const CRY_CONFIG = Object.assign({
     minDbAboveNoise: 12,
     cooldownSeconds: 10,
     noiseFloorWindowSeconds: 8,
-    noiseFloorUpdateMarginDb: 3
+    noiseFloorUpdateMarginDb: 3,
+    needsCareSustainedSeconds: 120,
+    nonCriticalStateMinHoldSeconds: 60
 }, window.CRY_CONFIG || {});
 const VAD_MIN_DB_ABOVE_NOISE = Math.max(6, CRY_CONFIG.minDbAboveNoise - 4);
 const WHITE_NOISE_CANCEL_GAIN = 1.0;
@@ -134,11 +138,13 @@ const STATE_THRESHOLDS = {
     needsCareDbAboveNoise: CRY_CONFIG.minDbAboveNoise,
     settleSeconds: 30,
     stirringSeconds: 2,
-    needsCareSustainedSeconds: CRY_CONFIG.sustainedSeconds
+    needsCareSustainedSeconds: Math.max(1, Number(CRY_CONFIG.needsCareSustainedSeconds) || 120),
+    nonCriticalStateMinHoldSeconds: Math.max(1, Number(CRY_CONFIG.nonCriticalStateMinHoldSeconds) || 60)
 };
 
 const STORAGE_PREFIX = 'kgbaby';
 const STORAGE_VERSION = 'v1';
+const LAST_BABY_NAME_KEY = `${STORAGE_PREFIX}:lastBabyName`;
 
 function storageKey(roomId, role) {
     return `${STORAGE_PREFIX}:${STORAGE_VERSION}:${roomId}:${role}`;
@@ -239,9 +245,21 @@ function selectRole(nextRole) {
 
 function updateConnectState() {
     if (!btnConnect) return;
-    const roomName = roomIdInput.value.trim();
-    const ready = !!roomName && !!selectedRole;
+    const babyName = roomIdInput.value.trim();
+    const ready = !!babyName && !!selectedRole;
     btnConnect.disabled = !ready;
+}
+
+function restoreLastBabyName() {
+    if (!roomIdInput) return;
+    try {
+        const saved = localStorage.getItem(LAST_BABY_NAME_KEY);
+        if (saved && !roomIdInput.value.trim()) {
+            roomIdInput.value = saved;
+        }
+    } catch (e) {
+        // Ignore storage errors
+    }
 }
 
 // Event Listeners
@@ -263,6 +281,7 @@ if (whiteNoiseVolumeInput) whiteNoiseVolumeInput.addEventListener('input', handl
 if (whiteNoiseTimerSelect) whiteNoiseTimerSelect.addEventListener('change', handleWhiteNoiseTimerChange);
 if (whiteNoiseCta) whiteNoiseCta.addEventListener('click', () => attemptWhiteNoisePlayback());
 
+restoreLastBabyName();
 updateConnectState();
 
 let lastDimTap = 0;
@@ -293,6 +312,7 @@ async function startSession(selectedRole) {
         noiseFloorDb = null;
         elevatedStartTs = null;
         currentInfantState = 'zzz';
+        lastNonCriticalStateSentAt = 0;
         lastVadSampleTs = null;
         gateStartTs = null;
         if (stateSummaryInterval) {
@@ -324,9 +344,9 @@ async function startSession(selectedRole) {
         silentStream = null;
         silentAudioCtx = null;
 
-        const roomName = roomIdInput.value.trim();
-        if (!roomName) {
-            alert('Please enter a Room Name');
+        const babyName = roomIdInput.value.trim();
+        if (!babyName) {
+            alert('Please enter a Baby Name');
             return;
         }
 
@@ -357,11 +377,17 @@ async function startSession(selectedRole) {
         });
 
         role = selectedRole;
-        roomId = roomName.toLowerCase().replace(/[^a-z0-9]/g, ''); // Sanitize
+        displayBabyName = babyName;
+        roomId = babyName.toLowerCase().replace(/[^a-z0-9]/g, ''); // Sanitize internal ID
+        try {
+            localStorage.setItem(LAST_BABY_NAME_KEY, displayBabyName);
+        } catch (e) {
+            // Ignore storage errors
+        }
         
         // Check if ID is empty after sanitize
         if (!roomId) {
-            log("Invalid Room Name. Use letters/numbers only.", true);
+            log("Invalid Baby Name. Include letters or numbers.", true);
             return;
         }
         
@@ -841,15 +867,15 @@ function setParentDimStateFromChild(enabled) {
 
 function ensureStateSummaryInterval() {
     if (stateSummaryInterval) return;
-    stateSummaryInterval = setInterval(updateStateSummaryDisplay, 10000);
+    stateSummaryInterval = setInterval(updateStateSummaryDisplay, 60000);
 }
 
 function getInfantStateLabel(state) {
     const labels = {
-        zzz: 'Zzz',
-        settled: 'Settled',
-        stirring: 'Stirring',
-        needsCare: 'Needs attention'
+        zzz: '😴 Zzz',
+        settled: '🙂 Settled',
+        stirring: '😣 Stirring',
+        needsCare: '🚨 Needs attention'
     };
     return labels[state] || labels.zzz;
 }
@@ -867,7 +893,7 @@ function updateStateSummaryDisplay() {
     if (!stateSummaryEl) return;
     applyStateSummaryStyle();
     if (!lastElevatedTs) {
-        stateSummaryEl.textContent = `State: ${getInfantStateLabel(infantState)}`;
+        stateSummaryEl.textContent = `Baby state: ${getInfantStateLabel(infantState)}`;
         return;
     }
     const elapsedSec = Math.floor((Date.now() - lastElevatedTs) / 1000);
@@ -882,7 +908,7 @@ function updateStateSummaryDisplay() {
         const mins = Math.floor((elapsedSec % 3600) / 60);
         text = `${hours}h ${mins}m ago`;
     }
-    stateSummaryEl.textContent = `State: ${getInfantStateLabel(infantState)} · Elevated ${text}`;
+    stateSummaryEl.textContent = `Baby state: ${getInfantStateLabel(infantState)} · Last elevated ${text}`;
 }
 
 function handleElevatedAudioMessage(data) {
@@ -1069,7 +1095,7 @@ function initChild() {
         console.error('Peer Error:', err.type, err);
         if (err.type === 'unavailable-id') {
             log(`ID '${roomId}' taken.`, true);
-            alert('Room Name Taken. Please choose another.');
+            alert('Baby Name Taken. Please choose another.');
             stopSession();
         } else if (err.type === 'network') {
             log('Network Error.', true);
@@ -1267,9 +1293,14 @@ function maybeDetectElevatedActivity(levelDb, now) {
 
 
 
-function setChildState(nextState, confidence = null) {
+function setChildState(nextState, confidence = null, now = Date.now()) {
     if (role !== 'child') return;
     if (currentInfantState === nextState) return;
+    if (nextState !== 'needsCare') {
+        const minGapMs = STATE_THRESHOLDS.nonCriticalStateMinHoldSeconds * 1000;
+        if (lastNonCriticalStateSentAt && now - lastNonCriticalStateSentAt < minGapMs) return;
+        lastNonCriticalStateSentAt = now;
+    }
     currentInfantState = nextState;
     sendStateEvent(nextState, confidence);
 }
@@ -1282,9 +1313,9 @@ function updateInfantState(levelDb, now) {
         if (!elevatedStartTs) elevatedStartTs = now;
         const elapsed = now - elevatedStartTs;
         if (elapsed >= STATE_THRESHOLDS.needsCareSustainedSeconds * 1000) {
-            setChildState('needsCare', 0.9);
+            setChildState('needsCare', 0.9, now);
         } else if (elapsed >= STATE_THRESHOLDS.stirringSeconds * 1000) {
-            setChildState('stirring', 0.7);
+            setChildState('stirring', 0.7, now);
         }
         return;
     }
@@ -1292,15 +1323,15 @@ function updateInfantState(levelDb, now) {
     elevatedStartTs = null;
 
     if (above >= STATE_THRESHOLDS.stirringDbAboveNoise) {
-        setChildState('stirring', 0.6);
+        setChildState('stirring', 0.6, now);
         return;
     }
 
     const sinceLastNoise = now - lastNoiseTime;
     if (sinceLastNoise >= STATE_THRESHOLDS.settleSeconds * 1000) {
-        setChildState('zzz', 0.8);
+        setChildState('zzz', 0.8, now);
     } else {
-        setChildState('settled', 0.65);
+        setChildState('settled', 0.65, now);
     }
 }
 function getSilentStream() {
@@ -1372,7 +1403,7 @@ function initParent() {
         console.error(err);
         if (err.type === 'unavailable-id') {
              log(`ID '${roomId}' taken.`, true);
-             alert('Room Name Taken.');
+             alert('Baby Name Taken.');
              stopSession();
         } else {
             log(`Peer Error: ${err.type}`, true);
@@ -1546,9 +1577,13 @@ function updateStatus(isConnected, type = 'server') {
 function setStatusText(state) {
     connectionState = state;
     if (!statusText) return;
-    const room = roomId || '--';
+    const baby = displayBabyName || '--';
     const label = state === 'connected' ? 'Audio connected' : (state === 'waiting' ? 'Waiting' : 'Disconnected');
-    statusText.textContent = `${label} · Room: ${room}`;
+    if (role === 'parent' && state === 'connected') {
+        statusText.textContent = `Audio connected · Spying on ${baby}`;
+    } else {
+        statusText.textContent = `${label} · Baby: ${baby}`;
+    }
 
     if (statusIndicator) {
         statusIndicator.classList.remove('connected', 'disconnected', 'waiting');

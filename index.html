@@ -35,9 +35,9 @@
                 </div>
 
                 <div class="room-input-container">
-                    <label for="room-id">Room Name</label>
-                    <input type="text" id="room-id" placeholder="e.g. cabin123" autocapitalize="none">
-                    <p class="hint">Use the same room name on both devices.</p>
+                    <label for="room-id">Baby Name</label>
+                    <input type="text" id="room-id" placeholder="e.g. Samay" autocapitalize="words">
+                    <p class="hint">Use the same baby name on both devices.</p>
                 </div>
 
                 <button id="btn-connect" class="btn-primary" disabled>Connect</button>
@@ -51,11 +51,11 @@
                 <div class="header-left">
                     <p class="app-version">KGBaby v0.2</p>
                     <h2 id="role-display">Role</h2>
-                    <div id="state-summary" class="state-line hidden">State: Zzz</div>
+                    <div id="state-summary" class="state-line hidden">Baby state: 😴 Zzz</div>
                 </div>
                 <div class="status-wrap">
                     <div id="connection-status" class="status-indicator disconnected"></div>
-                    <div id="status-text" class="status-text">Disconnected · Room: --</div>
+                    <div id="status-text" class="status-text">Disconnected · Baby: --</div>
                 </div>
             </header>
 
@@ -70,7 +70,7 @@
                     </section>
 
                     <section class="surface-card">
-                        <p class="card-label">Room activity</p>
+                        <p class="card-label">Baby activity</p>
                         <div class="visualizer-container">
                             <div id="child-db-meter" class="meter-background">
                                 <div id="child-db-level" class="meter-fill"></div>
@@ -82,7 +82,7 @@
 
                 <div id="parent-controls" class="hidden role-stack">
                     <section class="surface-card">
-                        <p class="card-label">Live room activity</p>
+                        <p class="card-label">Live baby activity</p>
                         <div class="visualizer-container">
                             <div id="parent-db-meter" class="meter-background">
                                 <div id="parent-db-level" class="meter-fill"></div>
