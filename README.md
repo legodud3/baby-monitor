@@ -1,4 +1,4 @@
-# KGBaby v0.2 - Private Browser Baby Monitor
+# KGBaby v0.3 - Private Browser Baby Monitor
 
 A secure, low-latency audio monitor that runs in the browser using direct WebRTC (PeerJS) connections.
 
@@ -8,17 +8,21 @@ A secure, low-latency audio monitor that runs in the browser using direct WebRTC
 - **State-First Monitoring**: Parent view shows calm baby-state labels (`😴 Zzz`, `🙂 Settled`, `😣 Stirring`, `🚨 Needs attention`) plus `Last elevated ...` timing.
 - **Redesigned Mobile UI**: Card-based controls, stronger status visibility, and improved readability in low-light rooms.
 - **Parent Controls**: Trigger child white noise, set timer (30/60/infinite), adjust volume, and dim/wake child screen.
-- **Multiple Parents**: More than one parent device can join with the same baby name.
-- **Local Persistence**: White-noise and infant-state context are stored per baby session in local browser storage.
+- **Join-Code Pairing**: Pair devices with a non-identifying join code (example: `OTTER-AB12-CD34`).
+- **Multiple Parents**: More than one parent device can join with the same join code.
+- **Fail-Safe Alarm Skeleton**: Parent supports heartbeat watchdog checks with an alarm acknowledgment flow.
+- **Local Persistence**: White-noise and infant-state context are stored per join code in local browser storage.
 - **Reliability Guards**: Auto-reconnect handling, wake-lock support, and debug overlay (`?debug=1`).
 
 ## Quick Start
 
 1. Open the app on two devices.
 2. Choose `Child Unit` on the nursery device and `Parent Unit` on the listening device.
-3. Enter the same baby name on both devices.
-4. Tap `Connect`.
-5. On parent, tap `Start Listening` if autoplay is blocked.
+3. On child, the app auto-generates a join code. Tap `Copy Code` and share it to parent.
+4. Enter that same join code on parent.
+5. (Optional) Set a baby name label on each device for friendly UI text.
+6. Tap `Connect`.
+7. On parent, tap `Enable Alarms` once and `Start Listening` if autoplay is blocked.
 
 ## Recommended Setup
 
@@ -80,7 +84,7 @@ If direct peer connection fails on restrictive networks:
 - **No audio**: Tap `Start Listening` on parent (autoplay policy).
 - **White noise not playing**: On child, tap `Tap to enable white noise`.
 - **Quiet output**: Raise device volume on parent.
-- **Unstable connection**: Refresh both devices and rejoin with the same baby name.
+- **Unstable connection**: Refresh both devices and rejoin with the same join code.
 - **Echo**: Keep parent device out of the nursery.
 
 ## Development

@@ -5,6 +5,10 @@ const btnChild = document.getElementById('btn-child');
 const btnParent = document.getElementById('btn-parent');
 const btnConnect = document.getElementById('btn-connect');
 const roomIdInput = document.getElementById('room-id');
+const babyNameInput = document.getElementById('baby-name');
+const joinCodeActions = document.getElementById('join-code-actions');
+const btnCopyCode = document.getElementById('btn-copy-code');
+const btnNewCode = document.getElementById('btn-new-code');
 const roleDisplay = document.getElementById('role-display');
 const statusIndicator = document.getElementById('connection-status');
 const childControls = document.getElementById('child-controls');
@@ -26,12 +30,19 @@ const whiteNoiseAudio = document.getElementById('white-noise-audio');
 const whiteNoiseStatus = document.getElementById('white-noise-status');
 const whiteNoiseRemaining = document.getElementById('white-noise-remaining');
 const whiteNoiseCta = document.getElementById('white-noise-cta');
+const btnEnableAlarms = document.getElementById('btn-enable-alarms');
+const btnAckAlarm = document.getElementById('btn-ack-alarm');
+const btnRecordShush = document.getElementById('btn-record-shush');
+const btnToggleShush = document.getElementById('btn-toggle-shush');
+const btnClearShush = document.getElementById('btn-clear-shush');
+const shushStatus = document.getElementById('shush-status');
 
 // State
 let role = null;
 let selectedRole = null;
 let roomId = null;
 let displayBabyName = '';
+let displayJoinCode = '';
 let peer = null;
 let currentCall = null;
 let localStream = null;
@@ -93,11 +104,39 @@ let whiteNoiseStartedAt = null;
 let whiteNoiseStopTimeout = null;
 let whiteNoiseUiInterval = null;
 let whiteNoiseAutoplayBlocked = false;
+let shushClipDataUrl = null;
+let shushUseCustom = false;
+let shushRecording = false;
+let shushRecorder = null;
+let shushChunks = [];
+let shushRecordTimeout = null;
+let shushRecordStream = null;
+let childShushClipDataUrl = null;
+let childShushBuffer = null;
+let childShushBufferKey = '';
+let childShushSourceNode = null;
+let whiteNoiseUsingCustomPlayback = false;
+let childHeartbeatInterval = null;
+let parentHeartbeatWatchdogInterval = null;
+let heartbeatSeq = 0;
+let lastHeartbeatAt = 0;
+let parentPeerHardResetTimer = null;
+let alarmGraceTimeout = null;
+let alarmsEnabled = false;
+let alarmActive = false;
+let alarmAudioCtx = null;
+let alarmOscillator = null;
+let alarmGainNode = null;
+let alarmPulseInterval = null;
 
 // Constants
 const MAX_LOG_ENTRIES = 200;
 const STATS_INTERVAL_MS = 2500;
 const SILENCE_WARN_MS = 12000;
+const HEARTBEAT_INTERVAL_MS = 3000;
+const HEARTBEAT_TIMEOUT_MS = 15000;
+const DATA_CHANNEL_ALARM_GRACE_MS = 5000;
+const PARENT_PEER_HARD_RESET_MS = 10000;
 const NETWORK_CONFIG = Object.assign({
     lowBandwidth: false,
     bitrateLevelsKbps: [32, 48, 64],
@@ -145,6 +184,14 @@ const STATE_THRESHOLDS = {
 const STORAGE_PREFIX = 'kgbaby';
 const STORAGE_VERSION = 'v1';
 const LAST_BABY_NAME_KEY = `${STORAGE_PREFIX}:lastBabyName`;
+const LAST_JOIN_CODE_KEY = `${STORAGE_PREFIX}:lastJoinCode`;
+const SHUSH_MAX_RECORD_MS = 10000;
+const ANIMAL_ALIASES = [
+    'otter', 'panda', 'koala', 'fox', 'seal', 'dolphin', 'tiger', 'lion',
+    'sloth', 'lemur', 'penguin', 'falcon', 'sparrow', 'rabbit', 'alpaca', 'yak',
+    'beaver', 'badger', 'gecko', 'whale', 'manta', 'narwhal', 'owl', 'swan',
+    'orca', 'moose', 'bison', 'zebra', 'elephant', 'jaguar', 'hedgehog', 'meerkat'
+];
 
 function storageKey(roomId, role) {
     return `${STORAGE_PREFIX}:${STORAGE_VERSION}:${roomId}:${role}`;
@@ -220,6 +267,416 @@ function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
 }
 
+function hashString32(input) {
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+}
+
+function randomInt(max) {
+    if (window.crypto && window.crypto.getRandomValues) {
+        const arr = new Uint32Array(1);
+        window.crypto.getRandomValues(arr);
+        return arr[0] % max;
+    }
+    return Math.floor(Math.random() * max);
+}
+
+function normalizeJoinCode(value) {
+    if (!value) return '';
+    return value.trim().toUpperCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
+}
+
+function isValidJoinCode(value) {
+    return /^[A-Z]+-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(value);
+}
+
+function generateJoinCode() {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const segment = () => {
+        let out = '';
+        for (let i = 0; i < 4; i++) out += alphabet[randomInt(alphabet.length)];
+        return out;
+    };
+    const animal = ANIMAL_ALIASES[randomInt(ANIMAL_ALIASES.length)].toUpperCase();
+    return `${animal}-${segment()}-${segment()}`;
+}
+
+function deriveSessionIdFromJoinCode(joinCode) {
+    const normalized = normalizeJoinCode(joinCode);
+    if (!isValidJoinCode(normalized)) return '';
+    const hash = hashString32(normalized);
+    return `code-${hash.toString(36)}`;
+}
+
+function stopAlarmTone() {
+    if (alarmPulseInterval) {
+        clearInterval(alarmPulseInterval);
+        alarmPulseInterval = null;
+    }
+    if (alarmOscillator) {
+        try { alarmOscillator.stop(); } catch (e) {}
+        try { alarmOscillator.disconnect(); } catch (e) {}
+        alarmOscillator = null;
+    }
+    if (alarmGainNode) {
+        try { alarmGainNode.disconnect(); } catch (e) {}
+        alarmGainNode = null;
+    }
+}
+
+function ensureAlarmAudioContext() {
+    if (!alarmAudioCtx) {
+        alarmAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (alarmAudioCtx.state === 'suspended') {
+        alarmAudioCtx.resume();
+    }
+}
+
+function startAlarmTone() {
+    if (!alarmsEnabled || alarmOscillator) return;
+    ensureAlarmAudioContext();
+    alarmOscillator = alarmAudioCtx.createOscillator();
+    alarmGainNode = alarmAudioCtx.createGain();
+    alarmOscillator.type = 'square';
+    alarmOscillator.frequency.value = 880;
+    alarmGainNode.gain.value = 0.0001;
+    alarmOscillator.connect(alarmGainNode);
+    alarmGainNode.connect(alarmAudioCtx.destination);
+    alarmOscillator.start();
+    let high = false;
+    const pulse = () => {
+        if (!alarmGainNode || !alarmAudioCtx) return;
+        const now = alarmAudioCtx.currentTime;
+        high = !high;
+        alarmOscillator.frequency.setValueAtTime(high ? 980 : 720, now);
+        alarmGainNode.gain.cancelScheduledValues(now);
+        alarmGainNode.gain.setValueAtTime(high ? 0.45 : 0.08, now);
+    };
+    pulse();
+    alarmPulseInterval = setInterval(pulse, 450);
+}
+
+function updateAlarmButtons() {
+    if (btnEnableAlarms) {
+        btnEnableAlarms.textContent = alarmsEnabled ? 'Alarms Enabled' : 'Enable Alarms';
+    }
+    if (btnAckAlarm) {
+        btnAckAlarm.classList.toggle('hidden', !alarmActive);
+    }
+}
+
+function triggerConnectionAlarm(reason) {
+    if (role !== 'parent' || alarmActive) return;
+    alarmActive = true;
+    setStatusText('alarm');
+    if (audioStatus) {
+        audioStatus.textContent = alarmsEnabled
+            ? `ALARM: ${reason}`
+            : `ALARM: ${reason} (tap Enable Alarms for sound)`;
+    }
+    startAlarmTone();
+    updateAlarmButtons();
+}
+
+function acknowledgeAlarm() {
+    if (role !== 'parent') return;
+    alarmActive = false;
+    stopAlarmTone();
+    if (audioStatus) audioStatus.textContent = 'Alarm acknowledged. Monitoring...';
+    setStatusText('waiting');
+    updateAlarmButtons();
+}
+
+function enableAlarmsFromGesture() {
+    alarmsEnabled = true;
+    try {
+        ensureAlarmAudioContext();
+    } catch (e) {
+        // Ignore gesture/audio init failures.
+    }
+    updateAlarmButtons();
+}
+
+function clearAlarmGraceTimer() {
+    if (alarmGraceTimeout) {
+        clearTimeout(alarmGraceTimeout);
+        alarmGraceTimeout = null;
+    }
+}
+
+function scheduleDataChannelAlarm(reason) {
+    clearAlarmGraceTimer();
+    alarmGraceTimeout = setTimeout(() => {
+        alarmGraceTimeout = null;
+        triggerConnectionAlarm(reason);
+    }, DATA_CHANNEL_ALARM_GRACE_MS);
+}
+
+function sendHeartbeat() {
+    if (role !== 'child') return;
+    broadcastToParents({ type: 'heartbeat', t: Date.now(), seq: heartbeatSeq++ });
+}
+
+function startChildHeartbeat() {
+    if (childHeartbeatInterval) return;
+    heartbeatSeq = 0;
+    childHeartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopChildHeartbeat() {
+    if (!childHeartbeatInterval) return;
+    clearInterval(childHeartbeatInterval);
+    childHeartbeatInterval = null;
+}
+
+function startParentHeartbeatWatchdog() {
+    if (parentHeartbeatWatchdogInterval) return;
+    lastHeartbeatAt = Date.now();
+    parentHeartbeatWatchdogInterval = setInterval(() => {
+        if (role !== 'parent' || alarmActive) return;
+        if (Date.now() - lastHeartbeatAt > HEARTBEAT_TIMEOUT_MS) {
+            triggerConnectionAlarm('Heartbeat lost');
+            retryParentConnection();
+        }
+    }, 2000);
+}
+
+function stopParentHeartbeatWatchdog() {
+    if (!parentHeartbeatWatchdogInterval) return;
+    clearInterval(parentHeartbeatWatchdogInterval);
+    parentHeartbeatWatchdogInterval = null;
+}
+
+function clearParentPeerHardResetTimer() {
+    if (!parentPeerHardResetTimer) return;
+    clearTimeout(parentPeerHardResetTimer);
+    parentPeerHardResetTimer = null;
+}
+
+function hardResetParentPeer(reason) {
+    if (role !== 'parent') return;
+    log(`Hard resetting parent peer (${reason})`, true);
+    try { if (dataConn) dataConn.close(); } catch (e) {}
+    dataConn = null;
+    try { if (currentCall) currentCall.close(); } catch (e) {}
+    currentCall = null;
+    try { if (peer) peer.destroy(); } catch (e) {}
+    peer = null;
+    resetParentRetry();
+    initParent();
+}
+
+function scheduleParentPeerHardReset(reason) {
+    if (role !== 'parent' || parentPeerHardResetTimer) return;
+    parentPeerHardResetTimer = setTimeout(() => {
+        parentPeerHardResetTimer = null;
+        hardResetParentPeer(reason);
+    }, PARENT_PEER_HARD_RESET_MS);
+}
+
+function updateShushControls() {
+    if (!btnRecordShush || !btnToggleShush || !btnClearShush || !shushStatus) return;
+    btnRecordShush.textContent = shushRecording ? 'Stop Recording' : 'Record 10s Shush';
+    btnToggleShush.disabled = !shushClipDataUrl;
+    btnClearShush.disabled = !shushClipDataUrl;
+    btnToggleShush.textContent = `Use Recorded Shush: ${shushUseCustom ? 'On' : 'Off'}`;
+    if (shushRecording) {
+        shushStatus.textContent = 'Recording... speak your shush for up to 10 seconds.';
+    } else if (shushClipDataUrl) {
+        shushStatus.textContent = 'Recorded shush saved on this device.';
+    } else {
+        shushStatus.textContent = 'No custom shush recorded.';
+    }
+}
+
+function sendShushClipPayload() {
+    if (role !== 'parent' || !dataConn || !dataConn.open || !shushClipDataUrl) return;
+    dataConn.send({ type: 'white_noise_clip', dataUrl: shushClipDataUrl, ts: Date.now() });
+}
+
+async function startShushRecording() {
+    if (role !== 'parent' || shushRecording) return;
+    try {
+        shushRecordStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        shushChunks = [];
+        if (window.MediaRecorder && window.MediaRecorder.isTypeSupported &&
+            window.MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+            shushRecorder = new MediaRecorder(shushRecordStream, { mimeType: 'audio/webm;codecs=opus' });
+        } else {
+            shushRecorder = new MediaRecorder(shushRecordStream);
+        }
+        shushRecorder.ondataavailable = (evt) => {
+            if (evt.data && evt.data.size > 0) shushChunks.push(evt.data);
+        };
+        shushRecorder.onstop = () => {
+            const blob = new Blob(shushChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                shushClipDataUrl = typeof reader.result === 'string' ? reader.result : null;
+                shushUseCustom = !!shushClipDataUrl;
+                saveStoredState(roomId, 'parent', { shushClipDataUrl, shushUseCustom, updatedAt: Date.now() });
+                sendShushClipPayload();
+                updateShushControls();
+            };
+            reader.readAsDataURL(blob);
+            if (shushRecordStream) {
+                shushRecordStream.getTracks().forEach(track => track.stop());
+            }
+            shushRecordStream = null;
+            shushRecorder = null;
+            shushChunks = [];
+            shushRecording = false;
+            if (shushRecordTimeout) {
+                clearTimeout(shushRecordTimeout);
+                shushRecordTimeout = null;
+            }
+            updateShushControls();
+        };
+        shushRecorder.start();
+        shushRecording = true;
+        shushRecordTimeout = setTimeout(() => {
+            if (shushRecorder && shushRecording) {
+                shushRecorder.stop();
+            }
+        }, SHUSH_MAX_RECORD_MS);
+        updateShushControls();
+    } catch (e) {
+        log(`Shush recording failed: ${e.message}`, true);
+    }
+}
+
+function stopShushRecording() {
+    if (!shushRecorder || !shushRecording) return;
+    shushRecorder.stop();
+}
+
+function toggleShushRecording() {
+    if (shushRecording) stopShushRecording();
+    else startShushRecording();
+}
+
+function toggleUseRecordedShush() {
+    if (!shushClipDataUrl) return;
+    shushUseCustom = !shushUseCustom;
+    saveStoredState(roomId, 'parent', { shushClipDataUrl, shushUseCustom, updatedAt: Date.now() });
+    updateShushControls();
+    if (whiteNoiseEnabled) {
+        if (shushUseCustom) sendShushClipPayload();
+        sendWhiteNoisePayload(buildWhiteNoiseStartPayload(false));
+    }
+}
+
+function clearRecordedShush() {
+    shushClipDataUrl = null;
+    shushUseCustom = false;
+    saveStoredState(roomId, 'parent', { shushClipDataUrl: null, shushUseCustom: false, updatedAt: Date.now() });
+    if (role === 'parent' && dataConn && dataConn.open) {
+        dataConn.send({ type: 'white_noise_clip', dataUrl: null, ts: Date.now() });
+        if (whiteNoiseEnabled) {
+            sendWhiteNoisePayload(buildWhiteNoiseStartPayload(false));
+        }
+    }
+    updateShushControls();
+}
+
+function buildWhiteNoiseStartPayload(includeClip = false) {
+    const payload = {
+        type: 'white_noise',
+        action: 'start',
+        volume: whiteNoiseVolume,
+        durationMs: whiteNoiseDurationMs,
+        startedAt: whiteNoiseStartedAt,
+        useCustomShush: !!(shushUseCustom && shushClipDataUrl)
+    };
+    if (includeClip && shushClipDataUrl) {
+        payload.clipDataUrl = shushClipDataUrl;
+    }
+    return payload;
+}
+
+function applyLoopEdgeFade(buffer, fadeMs = 80) {
+    if (!buffer) return;
+    const sampleRate = buffer.sampleRate || 48000;
+    const fadeSamples = Math.min(Math.floor((fadeMs / 1000) * sampleRate), Math.floor(buffer.length / 2));
+    if (fadeSamples <= 0) return;
+    for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+        const data = buffer.getChannelData(channel);
+        for (let i = 0; i < fadeSamples; i++) {
+            const inGain = i / fadeSamples;
+            const outGain = (fadeSamples - i) / fadeSamples;
+            data[i] *= inGain;
+            data[data.length - 1 - i] *= outGain;
+        }
+    }
+}
+
+async function ensureChildShushBuffer() {
+    if (!childShushClipDataUrl || !audioCtx) return null;
+    if (childShushBuffer && childShushBufferKey === childShushClipDataUrl) return childShushBuffer;
+    const response = await fetch(childShushClipDataUrl);
+    const arr = await response.arrayBuffer();
+    const decoded = await audioCtx.decodeAudioData(arr.slice(0));
+    applyLoopEdgeFade(decoded, 80);
+    childShushBuffer = decoded;
+    childShushBufferKey = childShushClipDataUrl;
+    return childShushBuffer;
+}
+
+function stopCustomShushPlayback() {
+    if (!childShushSourceNode || !audioCtx) return;
+    const now = audioCtx.currentTime;
+    if (whiteNoisePlaybackGain) {
+        whiteNoisePlaybackGain.gain.cancelScheduledValues(now);
+        whiteNoisePlaybackGain.gain.setValueAtTime(whiteNoisePlaybackGain.gain.value, now);
+        whiteNoisePlaybackGain.gain.linearRampToValueAtTime(0, now + 0.25);
+    }
+    if (whiteNoiseCancelGain) {
+        whiteNoiseCancelGain.gain.cancelScheduledValues(now);
+        whiteNoiseCancelGain.gain.setValueAtTime(whiteNoiseCancelGain.gain.value, now);
+        whiteNoiseCancelGain.gain.linearRampToValueAtTime(0, now + 0.25);
+    }
+    const sourceToStop = childShushSourceNode;
+    setTimeout(() => {
+        try { sourceToStop.stop(); } catch (e) {}
+        try { sourceToStop.disconnect(); } catch (e) {}
+    }, 280);
+    childShushSourceNode = null;
+    whiteNoiseUsingCustomPlayback = false;
+}
+
+async function startCustomShushPlayback() {
+    if (role !== 'child') return false;
+    ensureWhiteNoiseAudioGraph();
+    if (!audioCtx) return false;
+    const buffer = await ensureChildShushBuffer();
+    if (!buffer) return false;
+    stopCustomShushPlayback();
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(whiteNoisePlaybackGain);
+    src.connect(whiteNoiseCancelGain);
+    childShushSourceNode = src;
+    whiteNoiseUsingCustomPlayback = true;
+    const now = audioCtx.currentTime;
+    const target = clamp(whiteNoiseVolume, 0, 1);
+    if (whiteNoisePlaybackGain) {
+        whiteNoisePlaybackGain.gain.setValueAtTime(0, now);
+        whiteNoisePlaybackGain.gain.linearRampToValueAtTime(target, now + 0.35);
+    }
+    if (whiteNoiseCancelGain) {
+        whiteNoiseCancelGain.gain.setValueAtTime(0, now);
+        whiteNoiseCancelGain.gain.linearRampToValueAtTime(-target * WHITE_NOISE_CANCEL_GAIN, now + 0.35);
+    }
+    src.start();
+    return true;
+}
+
 function formatRemaining(ms) {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const mins = Math.floor(totalSeconds / 60);
@@ -240,26 +697,79 @@ function selectRole(nextRole) {
     if (btnConnect) {
         btnConnect.textContent = nextRole === 'child' ? 'Connect as Child' : 'Connect as Parent';
     }
+    if (nextRole === 'child' && roomIdInput && !roomIdInput.value.trim()) {
+        roomIdInput.value = generateJoinCode();
+    }
+    ensureChildJoinCodePrefill();
+    if (joinCodeActions) {
+        joinCodeActions.classList.toggle('hidden', nextRole !== 'child');
+    }
     updateConnectState();
 }
 
 function updateConnectState() {
     if (!btnConnect) return;
-    const babyName = roomIdInput.value.trim();
-    const ready = !!babyName && !!selectedRole;
+    const joinCode = normalizeJoinCode(roomIdInput.value);
+    const ready = isValidJoinCode(joinCode) && !!selectedRole;
     btnConnect.disabled = !ready;
 }
 
 function restoreLastBabyName() {
-    if (!roomIdInput) return;
+    if (!babyNameInput) return;
     try {
         const saved = localStorage.getItem(LAST_BABY_NAME_KEY);
-        if (saved && !roomIdInput.value.trim()) {
-            roomIdInput.value = saved;
+        if (saved && !babyNameInput.value.trim()) {
+            babyNameInput.value = saved;
         }
     } catch (e) {
         // Ignore storage errors
     }
+}
+
+function restoreLastJoinCode() {
+    if (!roomIdInput) return;
+    try {
+        const saved = localStorage.getItem(LAST_JOIN_CODE_KEY);
+        if (saved && !roomIdInput.value.trim()) {
+            roomIdInput.value = normalizeJoinCode(saved);
+        }
+    } catch (e) {
+        // Ignore storage errors
+    }
+}
+
+function ensureChildJoinCodePrefill() {
+    if (!roomIdInput) return;
+    if (selectedRole !== 'child') return;
+    const normalized = normalizeJoinCode(roomIdInput.value);
+    if (!isValidJoinCode(normalized)) {
+        roomIdInput.value = generateJoinCode();
+    } else if (normalized !== roomIdInput.value) {
+        roomIdInput.value = normalized;
+    }
+    updateConnectState();
+}
+
+async function copyJoinCodeToClipboard() {
+    if (!roomIdInput) return;
+    const joinCode = normalizeJoinCode(roomIdInput.value);
+    if (!isValidJoinCode(joinCode)) {
+        ensureChildJoinCodePrefill();
+    }
+    const finalCode = normalizeJoinCode(roomIdInput.value);
+    if (!finalCode) return;
+    try {
+        await navigator.clipboard.writeText(finalCode);
+        log(`Join code copied: ${finalCode}`, false);
+    } catch (e) {
+        log('Could not copy join code automatically. Please copy manually.', true);
+    }
+}
+
+function regenerateJoinCode() {
+    if (!roomIdInput) return;
+    roomIdInput.value = generateJoinCode();
+    updateConnectState();
 }
 
 // Event Listeners
@@ -280,9 +790,20 @@ if (whiteNoiseToggle) whiteNoiseToggle.addEventListener('click', toggleParentWhi
 if (whiteNoiseVolumeInput) whiteNoiseVolumeInput.addEventListener('input', handleWhiteNoiseVolumeInput);
 if (whiteNoiseTimerSelect) whiteNoiseTimerSelect.addEventListener('change', handleWhiteNoiseTimerChange);
 if (whiteNoiseCta) whiteNoiseCta.addEventListener('click', () => attemptWhiteNoisePlayback());
+if (btnEnableAlarms) btnEnableAlarms.addEventListener('click', enableAlarmsFromGesture);
+if (btnAckAlarm) btnAckAlarm.addEventListener('click', acknowledgeAlarm);
+if (btnCopyCode) btnCopyCode.addEventListener('click', copyJoinCodeToClipboard);
+if (btnNewCode) btnNewCode.addEventListener('click', regenerateJoinCode);
+if (btnRecordShush) btnRecordShush.addEventListener('click', toggleShushRecording);
+if (btnToggleShush) btnToggleShush.addEventListener('click', toggleUseRecordedShush);
+if (btnClearShush) btnClearShush.addEventListener('click', clearRecordedShush);
 
+restoreLastJoinCode();
 restoreLastBabyName();
 updateConnectState();
+updateAlarmButtons();
+updateShushControls();
+if (joinCodeActions) joinCodeActions.classList.add('hidden');
 
 let lastDimTap = 0;
 dimOverlay.addEventListener('click', (e) => {
@@ -319,6 +840,16 @@ async function startSession(selectedRole) {
             clearInterval(stateSummaryInterval);
             stateSummaryInterval = null;
         }
+        stopChildHeartbeat();
+        stopParentHeartbeatWatchdog();
+        clearParentPeerHardResetTimer();
+        clearAlarmGraceTimer();
+        stopAlarmTone();
+        stopCustomShushPlayback();
+        childShushClipDataUrl = null;
+        childShushBuffer = null;
+        childShushBufferKey = '';
+        alarmActive = false;
         if (parentRetryTimeout) {
             clearTimeout(parentRetryTimeout);
             parentRetryTimeout = null;
@@ -344,9 +875,9 @@ async function startSession(selectedRole) {
         silentStream = null;
         silentAudioCtx = null;
 
-        const babyName = roomIdInput.value.trim();
-        if (!babyName) {
-            alert('Please enter a Baby Name');
+        const joinCode = normalizeJoinCode(roomIdInput.value);
+        if (!isValidJoinCode(joinCode)) {
+            alert('Please enter a valid Join Code (e.g., OTTER-AB12-CD34).');
             return;
         }
 
@@ -377,17 +908,19 @@ async function startSession(selectedRole) {
         });
 
         role = selectedRole;
-        displayBabyName = babyName;
-        roomId = babyName.toLowerCase().replace(/[^a-z0-9]/g, ''); // Sanitize internal ID
+        displayJoinCode = joinCode;
+        displayBabyName = babyNameInput ? babyNameInput.value.trim() : '';
+        roomId = deriveSessionIdFromJoinCode(joinCode);
         try {
-            localStorage.setItem(LAST_BABY_NAME_KEY, displayBabyName);
+            localStorage.setItem(LAST_JOIN_CODE_KEY, displayJoinCode);
+            if (displayBabyName) localStorage.setItem(LAST_BABY_NAME_KEY, displayBabyName);
         } catch (e) {
             // Ignore storage errors
         }
-        
-        // Check if ID is empty after sanitize
+
+        // Check if ID derivation failed
         if (!roomId) {
-            log("Invalid Baby Name. Include letters or numbers.", true);
+            log('Invalid Join Code.', true);
             return;
         }
         
@@ -421,6 +954,17 @@ async function startSession(selectedRole) {
         if (typeof stored.whiteNoiseStartedAt === 'number') {
             whiteNoiseStartedAt = stored.whiteNoiseStartedAt;
         }
+        if (role === 'parent' && typeof stored.shushClipDataUrl === 'string' && stored.shushClipDataUrl) {
+            shushClipDataUrl = stored.shushClipDataUrl;
+        } else {
+            shushClipDataUrl = null;
+        }
+        if (role === 'parent') {
+            shushUseCustom = !!stored.shushUseCustom && !!shushClipDataUrl;
+        } else {
+            shushUseCustom = false;
+        }
+        updateShushControls();
 
         if (role === 'child') {
             initChild();
@@ -469,6 +1013,23 @@ function stopSession() {
     if (vadInterval) clearInterval(vadInterval);
     if (statsInterval) clearInterval(statsInterval);
     if (stateSummaryInterval) clearInterval(stateSummaryInterval);
+    stopChildHeartbeat();
+    stopParentHeartbeatWatchdog();
+    clearParentPeerHardResetTimer();
+    clearAlarmGraceTimer();
+    stopAlarmTone();
+    stopCustomShushPlayback();
+    if (shushRecordTimeout) clearTimeout(shushRecordTimeout);
+    shushRecordTimeout = null;
+    if (shushRecorder && shushRecording) {
+        try { shushRecorder.stop(); } catch (e) {}
+    }
+    shushRecorder = null;
+    shushRecording = false;
+    if (shushRecordStream) {
+        shushRecordStream.getTracks().forEach(track => track.stop());
+    }
+    shushRecordStream = null;
     if (dataConn) dataConn.close();
     if (parentDataConns.size > 0) {
         parentDataConns.forEach(conn => {
@@ -507,8 +1068,10 @@ function stopSession() {
     transmitMixNode = null;
     if (audioCtx) audioCtx.close();
     if (silentAudioCtx) silentAudioCtx.close();
+    if (alarmAudioCtx) alarmAudioCtx.close();
     silentStream = null;
     silentAudioCtx = null;
+    alarmAudioCtx = null;
 
     if (role === 'parent') {
         clearStoredElevatedTimestamp(roomId, 'parent');
@@ -597,16 +1160,18 @@ function ensureWhiteNoiseAudioGraph() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    if (!whiteNoiseSourceNode) {
-        whiteNoiseSourceNode = audioCtx.createMediaElementSource(whiteNoiseAudio);
+    if (!whiteNoisePlaybackGain || !whiteNoiseCancelGain) {
         whiteNoisePlaybackGain = audioCtx.createGain();
         whiteNoiseCancelGain = audioCtx.createGain();
-        whiteNoiseSourceNode.connect(whiteNoisePlaybackGain);
         whiteNoisePlaybackGain.connect(audioCtx.destination);
-        whiteNoiseSourceNode.connect(whiteNoiseCancelGain);
         if (transmitMixNode) {
             whiteNoiseCancelGain.connect(transmitMixNode);
         }
+    }
+    if (!whiteNoiseSourceNode) {
+        whiteNoiseSourceNode = audioCtx.createMediaElementSource(whiteNoiseAudio);
+        whiteNoiseSourceNode.connect(whiteNoisePlaybackGain);
+        whiteNoiseSourceNode.connect(whiteNoiseCancelGain);
     }
     updateWhiteNoiseGains();
 }
@@ -623,6 +1188,20 @@ function updateWhiteNoiseGains() {
 
 function startWhiteNoisePlayback() {
     if (!whiteNoiseAudio || role !== 'child') return;
+    if (shushUseCustom && childShushClipDataUrl) {
+        whiteNoiseAudio.pause();
+        whiteNoiseAudio.currentTime = 0;
+        startCustomShushPlayback().then((started) => {
+            whiteNoiseAutoplayBlocked = !started;
+            updateWhiteNoiseCta();
+        }).catch(() => {
+            whiteNoiseAutoplayBlocked = true;
+            updateWhiteNoiseCta();
+        });
+        return;
+    }
+    stopCustomShushPlayback();
+    whiteNoiseUsingCustomPlayback = false;
     ensureWhiteNoiseAudioGraph();
     const playAttempt = whiteNoiseAudio.play();
     if (playAttempt && typeof playAttempt.then === 'function') {
@@ -638,6 +1217,8 @@ function startWhiteNoisePlayback() {
 
 function stopWhiteNoisePlayback() {
     if (!whiteNoiseAudio || role !== 'child') return;
+    stopCustomShushPlayback();
+    whiteNoiseUsingCustomPlayback = false;
     whiteNoiseAudio.pause();
     whiteNoiseAudio.currentTime = 0;
     whiteNoiseAutoplayBlocked = false;
@@ -731,13 +1312,8 @@ function toggleParentWhiteNoise() {
         return;
     }
     setWhiteNoiseState({ enabled: true, startedAt: Date.now() });
-    sendWhiteNoisePayload({
-        type: 'white_noise',
-        action: 'start',
-        volume: whiteNoiseVolume,
-        durationMs: whiteNoiseDurationMs,
-        startedAt: whiteNoiseStartedAt
-    });
+    if (shushClipDataUrl) sendShushClipPayload();
+    sendWhiteNoisePayload(buildWhiteNoiseStartPayload(false));
 }
 
 function handleWhiteNoiseVolumeInput() {
@@ -747,13 +1323,7 @@ function handleWhiteNoiseVolumeInput() {
     const nextVolume = clamp(raw / 100, 0, 1);
     setWhiteNoiseState({ volume: nextVolume });
     if (whiteNoiseEnabled) {
-        sendWhiteNoisePayload({
-            type: 'white_noise',
-            action: 'start',
-            volume: whiteNoiseVolume,
-            durationMs: whiteNoiseDurationMs,
-            startedAt: whiteNoiseStartedAt
-        });
+        sendWhiteNoisePayload(buildWhiteNoiseStartPayload(false));
     }
 }
 
@@ -762,13 +1332,7 @@ function handleWhiteNoiseTimerChange() {
     const nextDuration = parseDurationValue(whiteNoiseTimerSelect.value);
     if (whiteNoiseEnabled) {
         setWhiteNoiseState({ durationMs: nextDuration, startedAt: Date.now() });
-        sendWhiteNoisePayload({
-            type: 'white_noise',
-            action: 'start',
-            volume: whiteNoiseVolume,
-            durationMs: whiteNoiseDurationMs,
-            startedAt: whiteNoiseStartedAt
-        });
+        sendWhiteNoisePayload(buildWhiteNoiseStartPayload(false));
         return;
     }
     setWhiteNoiseState({ durationMs: nextDuration });
@@ -799,11 +1363,33 @@ function handleWhiteNoiseMessage(data) {
             }
         }
         const startedAt = typeof data.startedAt === 'number' ? data.startedAt : Date.now();
+        if (typeof data.useCustomShush === 'boolean') {
+            shushUseCustom = data.useCustomShush;
+        }
+        if (typeof data.clipDataUrl === 'string') {
+            childShushClipDataUrl = data.clipDataUrl || null;
+            childShushBuffer = null;
+            childShushBufferKey = '';
+        }
         setWhiteNoiseState({ enabled: true, volume, durationMs, startedAt });
         return;
     }
     if (data.action === 'stop') {
         setWhiteNoiseState({ enabled: false });
+    }
+}
+
+function handleWhiteNoiseClipMessage(data) {
+    if (!data || data.type !== 'white_noise_clip' || role !== 'child') return;
+    if (typeof data.dataUrl === 'string' && data.dataUrl) {
+        childShushClipDataUrl = data.dataUrl;
+    } else {
+        childShushClipDataUrl = null;
+    }
+    childShushBuffer = null;
+    childShushBufferKey = '';
+    if (whiteNoiseEnabled) {
+        startWhiteNoisePlayback();
     }
 }
 
@@ -932,12 +1518,17 @@ function handleStateMessage(data) {
 
 function handleParentDataMessage(data) {
     if (!data || !data.type) return;
+    if (data.type === 'heartbeat') {
+        lastHeartbeatAt = Date.now();
+        clearAlarmGraceTimer();
+    }
     if (data.type === 'elevated' || data.type === 'cry') handleElevatedAudioMessage({ ...data, type: 'elevated' });
     if (data.type === 'state') handleStateMessage(data);
     if (data.type === 'dim' && typeof data.enabled === 'boolean') {
         setParentDimStateFromChild(data.enabled);
     }
     if (data.type === 'white_noise') handleWhiteNoiseMessage(data);
+    if (data.type === 'white_noise_clip') handleWhiteNoiseClipMessage(data);
 }
 
 function handleChildDataMessage(data) {
@@ -947,6 +1538,7 @@ function handleChildDataMessage(data) {
         sendDimState();
     }
     if (data.type === 'white_noise') handleWhiteNoiseMessage(data);
+    if (data.type === 'white_noise_clip') handleWhiteNoiseClipMessage(data);
 }
 
 function sendElevatedEvent(ts) {
@@ -964,15 +1556,13 @@ function connectDataChannelToChild() {
     dataConn = peer.connect(targetId, { reliable: true });
     dataConn.on('open', () => {
         log('Data channel open', false);
+        clearAlarmGraceTimer();
+        startParentHeartbeatWatchdog();
         resetParentRetry();
+        setStatusText('waiting');
+        if (shushClipDataUrl) sendShushClipPayload();
         if (whiteNoiseEnabled) {
-            sendWhiteNoisePayload({
-                type: 'white_noise',
-                action: 'start',
-                volume: whiteNoiseVolume,
-                durationMs: whiteNoiseDurationMs,
-                startedAt: whiteNoiseStartedAt
-            });
+            sendWhiteNoisePayload(buildWhiteNoiseStartPayload(false));
         } else {
             sendWhiteNoisePayload({ type: 'white_noise', action: 'stop' });
         }
@@ -980,10 +1570,12 @@ function connectDataChannelToChild() {
     dataConn.on('data', handleParentDataMessage);
     dataConn.on('error', (err) => {
         log(`Data channel error: ${err.type || err}`, true);
+        scheduleDataChannelAlarm('Control channel error');
         retryParentConnection();
     });
     dataConn.on('close', () => {
         log('Data channel closed', true);
+        scheduleDataChannelAlarm('Control channel lost');
         retryParentConnection();
     });
 }
@@ -996,6 +1588,7 @@ function handleIncomingParentConnection(conn) {
     conn.on('data', handleChildDataMessage);
     conn.on('open', () => {
         log('Parent data channel open', false);
+        startChildHeartbeat();
         sendDimState();
         if (whiteNoiseEnabled && conn.open) {
             conn.send({
@@ -1003,7 +1596,8 @@ function handleIncomingParentConnection(conn) {
                 action: 'start',
                 volume: whiteNoiseVolume,
                 durationMs: whiteNoiseDurationMs,
-                startedAt: whiteNoiseStartedAt
+                startedAt: whiteNoiseStartedAt,
+                useCustomShush: shushUseCustom
             });
         }
     });
@@ -1011,6 +1605,7 @@ function handleIncomingParentConnection(conn) {
     conn.on('close', () => {
         parentDataConns.delete(conn.peer);
         log('Parent data channel closed', true);
+        if (parentDataConns.size === 0) stopChildHeartbeat();
     });
 }
 
@@ -1086,6 +1681,7 @@ function initChild() {
         updateStatus(true); // Connected to signaling server
         setStatusText('waiting');
         startStreaming();
+        startChildHeartbeat();
     });
 
     peer.on('call', (call) => handleChildCall(call));
@@ -1095,7 +1691,7 @@ function initChild() {
         console.error('Peer Error:', err.type, err);
         if (err.type === 'unavailable-id') {
             log(`ID '${roomId}' taken.`, true);
-            alert('Baby Name Taken. Please choose another.');
+            alert('Join Code collision. Generate a new code and try again.');
             stopSession();
         } else if (err.type === 'network') {
             log('Network Error.', true);
@@ -1389,6 +1985,7 @@ function initParent() {
 
     peer.on('open', (id) => {
         log('Peer Open. Connecting to Child...', false);
+        clearParentPeerHardResetTimer();
         switchToMonitor();
         updateStatus(true); 
         audioStatus.textContent = "Connecting to Child unit...";
@@ -1403,18 +2000,25 @@ function initParent() {
         console.error(err);
         if (err.type === 'unavailable-id') {
              log(`ID '${roomId}' taken.`, true);
-             alert('Baby Name Taken.');
+             alert('Join Code collision. Generate a new code and try again.');
              stopSession();
         } else {
             log(`Peer Error: ${err.type}`, true);
             updateStatus(false);
+            scheduleParentPeerHardReset(`peer-error-${err.type}`);
             retryParentConnection();
         }
     });
     
     peer.on('disconnected', () => {
          log('Disconnected. Reconnecting...', true);
+         scheduleParentPeerHardReset('signaling-disconnected');
          peer.reconnect();
+    });
+
+    peer.on('close', () => {
+        log('Peer closed. Hard reset required.', true);
+        scheduleParentPeerHardReset('peer-close');
     });
 }
 
@@ -1577,17 +2181,25 @@ function updateStatus(isConnected, type = 'server') {
 function setStatusText(state) {
     connectionState = state;
     if (!statusText) return;
-    const baby = displayBabyName || '--';
+    if (alarmActive && state !== 'alarm') return;
+    const baby = displayBabyName || displayJoinCode || '--';
+    const idLabel = displayBabyName ? 'Baby' : 'Code';
     const label = state === 'connected' ? 'Audio connected' : (state === 'waiting' ? 'Waiting' : 'Disconnected');
-    if (role === 'parent' && state === 'connected') {
+    if (state === 'alarm') {
+        statusText.textContent = 'ALARM · Check baby connection';
+    } else if (role === 'parent' && state === 'connected') {
         statusText.textContent = `Audio connected · Spying on ${baby}`;
     } else {
-        statusText.textContent = `${label} · Baby: ${baby}`;
+        statusText.textContent = `${label} · ${idLabel}: ${baby}`;
     }
 
     if (statusIndicator) {
-        statusIndicator.classList.remove('connected', 'disconnected', 'waiting');
-        statusIndicator.classList.add(state === 'connected' ? 'connected' : (state === 'waiting' ? 'waiting' : 'disconnected'));
+        statusIndicator.classList.remove('connected', 'disconnected', 'waiting', 'alarm');
+        statusIndicator.classList.add(
+            state === 'connected'
+                ? 'connected'
+                : (state === 'waiting' ? 'waiting' : (state === 'alarm' ? 'alarm' : 'disconnected'))
+        );
     }
 }
 
@@ -1646,6 +2258,7 @@ function attachCallConnectionListeners(call, roleLabel) {
         if (state === 'failed' || state === 'disconnected') {
             if (roleLabel === 'parent' && audioStatus) {
                 audioStatus.textContent = "Connection unstable. Reconnecting...";
+                if (state === 'failed') triggerConnectionAlarm('Media connection failed');
                 retryParentConnection();
             }
         }
@@ -1665,6 +2278,7 @@ function attachCallConnectionListeners(call, roleLabel) {
         if (state === 'failed') {
             if (roleLabel === 'parent' && audioStatus) {
                 audioStatus.textContent = "Connection failed. Reconnecting...";
+                triggerConnectionAlarm('Connection failed');
                 retryParentConnection();
             }
         }

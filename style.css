@@ -164,6 +164,18 @@ h1 {
     gap: 7px;
 }
 
+.join-code-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-inline {
+    width: auto;
+    flex: 1 1 auto;
+    margin-top: 0;
+    padding: 10px 12px;
+}
+
 label,
 .card-label {
     color: #cce9fa;
@@ -351,6 +363,12 @@ h2 {
     box-shadow: 0 0 14px rgba(255, 136, 136, 0.4);
 }
 
+.status-indicator.alarm {
+    background: #ff5252;
+    box-shadow: 0 0 16px rgba(255, 82, 82, 0.7);
+    animation: alarm-pulse 900ms ease-in-out infinite;
+}
+
 .monitor-main {
     display: flex;
     flex-direction: column;
@@ -476,6 +494,11 @@ footer {
         opacity: 1;
         transform: translateY(0);
     }
+}
+
+@keyframes alarm-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.85; }
+    50% { transform: scale(1.2); opacity: 1; }
 }
 
 @media (max-width: 420px) {

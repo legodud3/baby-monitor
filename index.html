@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>KGBaby v0.2 - Secure Audio Monitor</title>
+    <title>KGBaby v0.3 - Secure Audio Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Sora:wght@500;700&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
         <div id="landing-screen" class="screen">
             <section class="hero-card">
                 <p class="eyebrow">Private audio baby monitor</p>
-                <h1>KGBaby v0.2</h1>
+                <h1>KGBaby v0.3</h1>
                 <p class="hero-copy">One tap to pair devices, then monitor with low-latency audio, white noise controls, and calm infant state updates.</p>
             </section>
 
@@ -35,9 +35,19 @@
                 </div>
 
                 <div class="room-input-container">
-                    <label for="room-id">Baby Name</label>
-                    <input type="text" id="room-id" placeholder="e.g. Samay" autocapitalize="words">
-                    <p class="hint">Use the same baby name on both devices.</p>
+                    <label for="room-id">Join Code</label>
+                    <input type="text" id="room-id" placeholder="e.g. OTTER-AB12-CD34" autocapitalize="characters">
+                    <p class="hint">Use the same join code on both devices. Child can generate one.</p>
+                    <div id="join-code-actions" class="join-code-actions hidden">
+                        <button id="btn-copy-code" class="btn-secondary btn-inline" type="button">Copy Code</button>
+                        <button id="btn-new-code" class="btn-secondary btn-inline" type="button">New Code</button>
+                    </div>
+                </div>
+
+                <div class="room-input-container">
+                    <label for="baby-name">Baby Name (Optional)</label>
+                    <input type="text" id="baby-name" placeholder="e.g. Samay" autocapitalize="words">
+                    <p class="hint">Used only on this device for friendly labels.</p>
                 </div>
 
                 <button id="btn-connect" class="btn-primary" disabled>Connect</button>
@@ -49,13 +59,13 @@
         <div id="monitor-screen" class="screen hidden">
             <header class="monitor-header">
                 <div class="header-left">
-                    <p class="app-version">KGBaby v0.2</p>
+                    <p class="app-version">KGBaby v0.3</p>
                     <h2 id="role-display">Role</h2>
                     <div id="state-summary" class="state-line hidden">Baby state: 😴 Zzz</div>
                 </div>
                 <div class="status-wrap">
                     <div id="connection-status" class="status-indicator disconnected"></div>
-                    <div id="status-text" class="status-text">Disconnected · Baby: --</div>
+                    <div id="status-text" class="status-text">Disconnected · Code: --</div>
                 </div>
             </header>
 
@@ -94,6 +104,11 @@
                         <p class="card-label">Comfort controls</p>
                         <label>White noise</label>
                         <button id="white-noise-toggle" class="btn-secondary" type="button">Start White Noise</button>
+                        <label>Custom shush loop</label>
+                        <button id="btn-record-shush" class="btn-secondary" type="button">Record 10s Shush</button>
+                        <button id="btn-toggle-shush" class="btn-secondary" type="button" disabled>Use Recorded Shush: Off</button>
+                        <button id="btn-clear-shush" class="btn-secondary" type="button" disabled>Delete Recorded Shush</button>
+                        <div id="shush-status" class="hint">No custom shush recorded.</div>
                         <label for="white-noise-volume">Volume</label>
                         <input id="white-noise-volume" type="range" min="0" max="100" value="50">
                         <label for="white-noise-timer">Timer</label>
@@ -105,6 +120,8 @@
                     </section>
 
                     <button id="btn-dim-parent" class="btn-secondary" type="button">Dim Child Screen</button>
+                    <button id="btn-enable-alarms" class="btn-secondary" type="button">Enable Alarms</button>
+                    <button id="btn-ack-alarm" class="btn-danger hidden" type="button">I Checked The Baby</button>
                     <audio id="remote-audio" autoplay playsinline style="display:none;" muted></audio>
                     <button id="btn-listen" class="btn-primary">Start Listening</button>
                     <div id="audio-status">Waiting for audio...</div>
