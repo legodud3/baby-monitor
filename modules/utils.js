@@ -51,7 +51,7 @@ export function normalizeJoinCode(value) {
 }
 
 export function isValidJoinCode(value) {
-    return /^[A-Z]+-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(value);
+    return /^[A-Z0-9]+-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(value);
 }
 
 export function generateJoinCode() {
