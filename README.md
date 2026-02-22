@@ -87,6 +87,7 @@ If direct peer connection fails on restrictive networks:
 - **Unstable connection**: Refresh both devices and rejoin with the same join code.
 - **Echo**: Keep parent device out of the nursery.
 - **PeerJS failed to load**: App loads `vendor/peerjs.min.js` first, then falls back to `unpkg.com`. If both fail, check captive portal, VPN, DNS, and firewall.
+- **Build mismatch across devices**: Compare the `Build ...` suffix in the status line on both devices. If different, fully close/reopen tabs and hard refresh.
 
 ## Development
 
@@ -101,6 +102,20 @@ npx serve
 
 - Runtime loads PeerJS from `vendor/peerjs.min.js` first, with CDN fallback to `https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js`.
 - Dependency is pinned as `peerjs@1.5.2` in `package.json` for provenance/version tracking.
+
+### Build Fingerprint and Release Verification
+
+- Build ID source of truth: `APP_BUILD_ID` in `modules/config.js`.
+- App logs build info on startup: `[BUILD] id=... stage=... url=...`.
+- Status line includes `Build ...` to compare parent/child quickly.
+
+```bash
+# Verify the deployed app bundle exposes build logging in main.js
+curl -fsSL https://legodud3.github.io/kgbaby/main.js | rg "\\[BUILD\\]"
+
+# Verify the deployed build fingerprint value
+curl -fsSL https://legodud3.github.io/kgbaby/modules/config.js | rg "APP_BUILD_ID|2026-02-22.1"
+```
 
 ### Architecture
 - `main.js`: Entry point that orchestrates role selection and application lifecycle.

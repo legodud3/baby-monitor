@@ -65,8 +65,17 @@ export function connectDataChannelToChild(roomId) {
 }
 
 export function broadcastToParents(data) {
-    parentDataConns.forEach(conn => {
-        if (conn.open) conn.send(data);
+    parentDataConns.forEach((conn, peerId) => {
+        if (!conn || !conn.open) {
+            parentDataConns.delete(peerId);
+            return;
+        }
+        try {
+            conn.send(data);
+        } catch (err) {
+            parentDataConns.delete(peerId);
+            log(`Failed to send data to parent ${peerId}`, true);
+        }
     });
 }
 

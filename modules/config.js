@@ -4,6 +4,7 @@ const runtime = typeof window !== 'undefined' ? window : globalThis;
 const runtimeCry = runtime?.CRY_CONFIG || {};
 const runtimeNetwork = runtime?.NETWORK_CONFIG || {};
 const runtimeTurn = runtime?.TURN_CONFIG || null;
+export const APP_BUILD_ID = runtime?.APP_BUILD_ID || '2026-02-22.1';
 
 export const CRY_CONFIG = {
     sustainedSeconds: 1.5,
@@ -94,6 +95,7 @@ export const STATS_INTERVAL_MS = 2500;
 export const SILENCE_WARN_MS = 12000;
 export const HEARTBEAT_INTERVAL_MS = 3000;
 export const HEARTBEAT_TIMEOUT_MS = 15000;
+export const DATA_CHANNEL_OPEN_TIMEOUT_MS = 8000;
 export const DATA_CHANNEL_ALARM_GRACE_MS = 5000;
 export const PARENT_PEER_HARD_RESET_MS = 10000;
 

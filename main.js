@@ -4,6 +4,7 @@ import * as ui from './modules/ui.js';
 import * as audio from './modules/audio.js';
 import * as network from './modules/network.js';
 import * as alarm from './modules/alarm.js';
+import { shouldTriggerParentAlarm } from './modules/watchdog.js';
 
 const { elements } = ui;
 
@@ -30,6 +31,13 @@ let parentConnectAttempt = 0;
 let parentStatsLastLogAt = 0;
 let parentHeartbeatCount = 0;
 let parentHeartbeatWarningShown = false;
+let parentHeartbeatAlarmActive = false;
+let parentMediaConnected = false;
+let parentLastMediaActivityAt = 0;
+let parentDataChannelOpen = false;
+let parentDataChannelOpenTimeout = null;
+let parentDataChannelRetryCount = 0;
+let parentDataMissingLogShown = false;
 let childHeartbeatCount = 0;
 let childStatsLastLogAt = 0;
 
@@ -40,9 +48,18 @@ let lastHeartbeatAt = 0;
 // Initialization
 function init() {
     if (!isPeerJsAvailable()) return;
+    logBuildFingerprint('init');
     restoreLastSession();
     attachEventListeners();
     updateConnectState();
+}
+
+function buildTag() {
+    return `Build ${config.APP_BUILD_ID}`;
+}
+
+function logBuildFingerprint(stage) {
+    utils.log(`[BUILD] id=${config.APP_BUILD_ID} stage=${stage} url=${window.location.href}`);
 }
 
 function parentLog(message, isError = false) {
@@ -82,6 +99,9 @@ function attachParentPeerConnectionDebug(call) {
         });
         pc.addEventListener('connectionstatechange', () => {
             parentLog(`Peer connection state -> ${pc.connectionState}`);
+            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                parentMediaConnected = false;
+            }
         });
         pc.addEventListener('signalingstatechange', () => {
             parentLog(`Signaling state -> ${pc.signalingState}`);
@@ -219,10 +239,11 @@ async function startSession(roleChoice) {
     } catch (e) {}
 
     utils.log(`Starting session as ${role}...`);
+    logBuildFingerprint(`start-${role}`);
     
     // UI Setup
     ui.showScreen('monitor');
-    elements.roleDisplay.textContent = role === 'child' ? 'Child Unit' : 'Parent Unit';
+    elements.roleDisplay.textContent = `${role === 'child' ? 'Child Unit' : 'Parent Unit'} · ${buildTag()}`;
     elements.monitorScreen.classList.toggle('parent-layout', role === 'parent');
     elements.monitorScreen.classList.toggle('child-layout', role === 'child');
     
@@ -250,14 +271,16 @@ function setStatusText(state) {
     const baby = displayBabyName || displayJoinCode || '--';
     const idLabel = displayBabyName ? 'Baby' : 'Code';
     let label = state === 'connected' ? 'Audio connected' : (state === 'waiting' ? 'Waiting' : 'Disconnected');
+    let baseText = '';
     
     if (state === 'alarm') {
-        elements.statusText.textContent = 'ALARM · Check baby connection';
+        baseText = 'ALARM · Check baby connection';
     } else if (role === 'parent' && state === 'connected') {
-        elements.statusText.textContent = `Audio connected · Spying on ${baby}`;
+        baseText = `Audio connected · Spying on ${baby}`;
     } else {
-        elements.statusText.textContent = `${label} · ${idLabel}: ${baby}`;
+        baseText = `${label} · ${idLabel}: ${baby}`;
     }
+    elements.statusText.textContent = `${baseText} · ${buildTag()}`;
     
     ui.updateConnectionStatus(state);
     if (role === 'parent') {
@@ -383,9 +406,11 @@ function handleIncomingDataConnection(conn) {
     });
     conn.on('close', () => {
         childLog(`Data channel closed with parent=${conn.peer || 'unknown'}.`, true);
+        network.getParentDataConns().delete(conn.peer);
     });
     conn.on('error', (err) => {
         childLog(`Data channel error with parent=${conn.peer || 'unknown'}: ${formatError(err)}`, true);
+        network.getParentDataConns().delete(conn.peer);
     });
 }
 
@@ -399,10 +424,97 @@ function handleChildDataMessage(data) {
 }
 
 // Parent Flow
+function clearParentDataChannelOpenTimeout() {
+    if (!parentDataChannelOpenTimeout) return;
+    clearTimeout(parentDataChannelOpenTimeout);
+    parentDataChannelOpenTimeout = null;
+}
+
+function scheduleParentDataChannelOpenTimeout(conn, reason) {
+    clearParentDataChannelOpenTimeout();
+    parentDataChannelOpenTimeout = setTimeout(() => {
+        if (network.getDataConn() !== conn) return;
+        if (conn.open) return;
+        parentDataChannelOpen = false;
+        parentLog(`Data channel open timeout (${config.DATA_CHANNEL_OPEN_TIMEOUT_MS}ms) after ${reason}. Recreating data channel.`, true);
+        if (parentMediaConnected) {
+            parentLog('Data path degraded: media connected + data missing.', true);
+        } else {
+            parentLog('Data path degraded: media disconnected + data missing.', true);
+        }
+        parentDataMissingLogShown = true;
+        createParentDataChannel('open-timeout');
+    }, config.DATA_CHANNEL_OPEN_TIMEOUT_MS);
+}
+
+function createParentDataChannel(reason) {
+    if (reason !== 'initial') {
+        parentDataChannelRetryCount += 1;
+        parentLog(`Data channel reconnect attempt #${parentDataChannelRetryCount} (${reason}).`);
+    }
+    const dataConn = network.connectDataChannelToChild(roomId);
+    if (!dataConn) {
+        parentLog(`network.connectDataChannelToChild returned no data connection during ${reason}.`, true);
+        return;
+    }
+
+    parentLog(`Data connection created (${reason}). peer=${dataConn.peer || 'unknown'}, label=${dataConn.label || 'default'}`);
+    if (dataConn.__kgbabyParentHandlersAttached) {
+        if (dataConn.open) {
+            parentDataChannelOpen = true;
+            clearParentDataChannelOpenTimeout();
+        } else {
+            scheduleParentDataChannelOpenTimeout(dataConn, reason);
+        }
+        return;
+    }
+
+    dataConn.__kgbabyParentHandlersAttached = true;
+    dataConn.on('data', (data) => {
+        if (network.getDataConn() !== dataConn) return;
+        handleParentDataMessage(data);
+    });
+    dataConn.on('open', () => {
+        if (network.getDataConn() !== dataConn) return;
+        utils.log('Data channel open');
+        parentDataChannelOpen = true;
+        parentDataMissingLogShown = false;
+        clearParentDataChannelOpenTimeout();
+        parentLog(`attempt connected: data channel open (attempt #${parentConnectAttempt})`);
+        alarm.clearAlarmGrace();
+    });
+    dataConn.on('close', () => {
+        if (network.getDataConn() !== dataConn) return;
+        parentDataChannelOpen = false;
+        parentLog('Data channel closed.', true);
+        createParentDataChannel('close');
+    });
+    dataConn.on('error', (err) => {
+        if (network.getDataConn() !== dataConn) return;
+        parentDataChannelOpen = false;
+        parentLog(`Data channel error: ${formatError(err)}`, true);
+        createParentDataChannel('error');
+    });
+
+    if (dataConn.open) {
+        parentDataChannelOpen = true;
+        clearParentDataChannelOpenTimeout();
+        parentLog(`attempt connected: data channel open (attempt #${parentConnectAttempt})`);
+    } else {
+        parentDataChannelOpen = false;
+        scheduleParentDataChannelOpenTimeout(dataConn, reason);
+    }
+}
+
 function initParentFlow() {
     const parentSuffix = Math.random().toString(36).slice(2, 8);
     const myId = `babymonitor-${roomId}-parent-${parentSuffix}`;
     parentLog(`Initializing parent flow. peerId=${myId}, room=${roomId}`);
+    clearParentDataChannelOpenTimeout();
+    parentDataChannelRetryCount = 0;
+    parentHeartbeatAlarmActive = false;
+    parentMediaConnected = false;
+    parentLastMediaActivityAt = 0;
     
     network.initNetwork({
         onOpen: (id) => {
@@ -415,6 +527,9 @@ function initParentFlow() {
         onError: (err) => {
             utils.log(`Network error: ${err.type || 'unknown'} ${err.message ? `- ${err.message}` : ''}`, true);
             parentLog(`Peer error: ${formatError(err)}`, true);
+            if (err?.type === 'peer-unavailable') {
+                parentLog(`attempt failed: peer-unavailable (attempt #${parentConnectAttempt})`, true);
+            }
             if (err?.type === 'network' || err?.type === 'socket-error' || err?.type === 'server-error') {
                 utils.log('Signal server unreachable. Check captive portal/VPN/firewall or use a custom PeerJS host.', true);
             }
@@ -439,6 +554,10 @@ function initParentFlow() {
 
 function connectToChild() {
     parentConnectAttempt += 1;
+    parentMediaConnected = false;
+    parentDataChannelOpen = false;
+    parentDataMissingLogShown = false;
+    parentLastMediaActivityAt = 0;
     const targetId = `babymonitor-${roomId}-child`;
     parentLog(`Connect attempt #${parentConnectAttempt} to child peer ${targetId}`);
     const silentDestination = audio.createMediaStreamDestination();
@@ -454,25 +573,8 @@ function connectToChild() {
     
     handleParentCall(call);
     attachParentPeerConnectionDebug(call);
-    
-    const dataConn = network.connectDataChannelToChild(roomId);
-    if (!dataConn) {
-        parentLog('network.connectDataChannelToChild returned no data connection.', true);
-        return;
-    }
-    parentLog(`Data connection created. peer=${dataConn.peer || 'unknown'}, label=${dataConn.label || 'default'}`);
-    dataConn.on('data', (data) => handleParentDataMessage(data));
-    dataConn.on('open', () => {
-        utils.log('Data channel open');
-        parentLog('Data channel open.');
-        alarm.clearAlarmGrace();
-    });
-    dataConn.on('close', () => {
-        parentLog('Data channel closed.', true);
-    });
-    dataConn.on('error', (err) => {
-        parentLog(`Data channel error: ${formatError(err)}`, true);
-    });
+
+    createParentDataChannel('initial');
 }
 
 function handleParentCall(call) {
@@ -482,6 +584,10 @@ function handleParentCall(call) {
         const tracks = stream?.getTracks?.() || [];
         const trackKinds = tracks.map(t => t.kind).join(',') || 'none';
         parentLog(`Remote stream received. tracks=${tracks.length}, kinds=${trackKinds}`);
+        parentMediaConnected = true;
+        parentLastMediaActivityAt = Date.now();
+        parentHeartbeatAlarmActive = false;
+        parentLog(`attempt connected: media stream received (attempt #${parentConnectAttempt})`);
         setStatusText('connected');
         audio.startPlayback(stream, (prefix, analyser) => ui.visualize(prefix, analyser))
             .then(() => parentLog('Remote audio playback started.'))
@@ -490,16 +596,21 @@ function handleParentCall(call) {
     
     call.on('close', () => {
         parentLog('MediaConnection close event fired.', true);
+        parentMediaConnected = false;
         setStatusText('waiting');
         retryParentConnection();
     });
 
     call.on('error', (err) => {
         parentLog(`MediaConnection error: ${formatError(err)}`, true);
+        parentMediaConnected = false;
     });
     
     network.startStatsLoop(call, 'inbound', (stats) => {
         const now = Date.now();
+        if (parentMediaConnected) {
+            parentLastMediaActivityAt = now;
+        }
         if (stats.isPoor || stats.silenceDetected || (now - parentStatsLastLogAt) > 10000) {
             parentStatsLastLogAt = now;
             parentLog(`Inbound stats: poor=${stats.isPoor} silence=${stats.silenceDetected} bitrate=${stats.bitrate ?? 'n/a'} rtt=${stats.rtt ?? 'n/a'} jitter=${stats.jitter ?? 'n/a'} lost=${stats.packetsLost ?? 'n/a'}`);
@@ -516,9 +627,12 @@ function handleParentDataMessage(data) {
         parentLog(`Received malformed data message: ${JSON.stringify(data)}`, true);
         return;
     }
+    parentDataChannelOpen = true;
+    parentDataMissingLogShown = false;
     if (data.type === 'heartbeat') {
         lastHeartbeatAt = Date.now();
         parentHeartbeatCount += 1;
+        parentHeartbeatAlarmActive = false;
         if (parentHeartbeatWarningShown) {
             parentHeartbeatWarningShown = false;
             parentLog('Heartbeat restored after warning.');
@@ -590,8 +704,9 @@ function startHeartbeat() {
     childLog(`Heartbeat sender started. interval=${config.HEARTBEAT_INTERVAL_MS}ms`);
     heartbeatInterval = setInterval(() => {
         childHeartbeatCount += 1;
-        if (childHeartbeatCount % 5 === 0) {
-            childLog(`Heartbeat sent (${childHeartbeatCount} total).`);
+        const openParents = Array.from(network.getParentDataConns().values()).filter((conn) => conn && conn.open).length;
+        if (childHeartbeatCount % 5 === 0 || openParents === 0) {
+            childLog(`Heartbeat sent (${childHeartbeatCount} total). openParents=${openParents}`);
         }
         network.broadcastToParents({ type: 'heartbeat', ts: Date.now() });
     }, config.HEARTBEAT_INTERVAL_MS);
@@ -601,15 +716,48 @@ function startHeartbeatWatchdog() {
     lastHeartbeatAt = Date.now();
     parentLog(`Heartbeat watchdog started. interval=${config.HEARTBEAT_INTERVAL_MS}ms timeout=${config.HEARTBEAT_TIMEOUT_MS}ms`);
     setInterval(() => {
-        const now = Date.now();
-        const age = now - lastHeartbeatAt;
-        if (age > (config.HEARTBEAT_TIMEOUT_MS * 0.66) && !parentHeartbeatWarningShown) {
-            parentHeartbeatWarningShown = true;
-            parentLog(`Heartbeat delayed: last heartbeat ${Math.round(age / 1000)}s ago.`, true);
+        const nowMs = Date.now();
+        const decision = shouldTriggerParentAlarm({
+            nowMs,
+            lastHeartbeatAtMs: lastHeartbeatAt,
+            lastMediaActivityAtMs: parentLastMediaActivityAt,
+            heartbeatTimeoutMs: config.HEARTBEAT_TIMEOUT_MS,
+            statsIntervalMs: config.STATS_INTERVAL_MS,
+            parentMediaConnected
+        });
+
+        if (decision.heartbeatStale && decision.mediaHealthy) {
+            if (!parentHeartbeatWarningShown) {
+                parentHeartbeatWarningShown = true;
+                parentLog(`Heartbeat stale (${Math.round(decision.heartbeatAgeMs / 1000)}s) but media healthy (${Math.round(decision.mediaAgeMs / 1000)}s). Suppressing alarm.`, true);
+            }
+            if (!parentDataChannelOpen && !parentDataMissingLogShown) {
+                parentDataMissingLogShown = true;
+                parentLog('Heartbeat missing while media connected (media connected + data missing).', true);
+            }
+            parentHeartbeatAlarmActive = false;
+            return;
         }
-        if (age > config.HEARTBEAT_TIMEOUT_MS) {
-            parentLog(`Heartbeat timeout: last heartbeat ${Math.round(age / 1000)}s ago. Triggering alarm.`, true);
-            alarm.scheduleAlarm('Connection lost (Heartbeat timeout)');
+
+        if (!decision.heartbeatStale) {
+            if (parentHeartbeatWarningShown) {
+                parentHeartbeatWarningShown = false;
+                parentLog('Heartbeat recovered and watchdog warning cleared.');
+            }
+            parentHeartbeatAlarmActive = false;
+            return;
+        }
+
+        if (!parentDataChannelOpen && !parentDataMissingLogShown) {
+            parentDataMissingLogShown = true;
+            parentLog('Heartbeat missing while media disconnected (media disconnected + data missing).', true);
+        }
+
+        if (decision.shouldAlarm && !parentHeartbeatAlarmActive) {
+            parentHeartbeatAlarmActive = true;
+            parentHeartbeatWarningShown = true;
+            parentLog(`Heartbeat timeout (${Math.round(decision.heartbeatAgeMs / 1000)}s) with unhealthy media. Triggering alarm.`, true);
+            alarm.scheduleAlarm('Connection lost (Heartbeat timeout + media unhealthy)');
             setStatusText('disconnected');
         }
     }, config.HEARTBEAT_INTERVAL_MS);
@@ -638,6 +786,7 @@ function sendDimStateFromChild(enabled) {
 }
 
 function stopSession() {
+    clearParentDataChannelOpenTimeout();
     location.reload();
 }
 
