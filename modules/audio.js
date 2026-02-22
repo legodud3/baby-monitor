@@ -116,6 +116,14 @@ export function setupTransmitChain(stream, whiteNoiseCancelGainNode = null) {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
+    if (!stream) {
+        // Child incoming calls can arrive after mic init; reuse existing send stream.
+        return sendStream || null;
+    }
+    if (typeof stream.getAudioTracks !== 'function' || stream.getAudioTracks().length === 0) {
+        log('Invalid mic stream for transmit chain', true);
+        return sendStream || null;
+    }
     if (micGainNode) {
         try { micGainNode.disconnect(); } catch (e) {}
     }
