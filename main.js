@@ -420,6 +420,7 @@ function handleIncomingCall(call) {
     
     network.startStatsLoop(call, 'outbound', (stats) => {
         const now = Date.now();
+        updateConnectionModeUI(stats);
         if (stats.isPoor || (now - childStatsLastLogAt) > 10000) {
             childStatsLastLogAt = now;
             childLog(`Outbound stats: poor=${stats.isPoor} bitrate=${stats.bitrate ?? 'n/a'} rtt=${stats.rtt ?? 'n/a'} jitter=${stats.jitter ?? 'n/a'} lost=${stats.packetsLost ?? 'n/a'}`);
@@ -619,6 +620,27 @@ function connectToChild() {
     createParentDataChannel('initial');
 }
 
+function updateConnectionModeUI(stats) {
+    if (!elements.connectionMode) return;
+    
+    if (stats && stats.candidateType) {
+        const type = stats.candidateType;
+        if (type === 'host' || type === 'srflx') {
+            elements.connectionMode.textContent = 'Mode: Direct (Private)';
+            elements.connectionMode.style.color = '#7bf1b6';
+        } else if (type === 'relay') {
+            elements.connectionMode.textContent = 'Mode: Relay (Metered)';
+            elements.connectionMode.style.color = '#ffd576';
+        } else {
+            elements.connectionMode.textContent = `Mode: ${type}`;
+            elements.connectionMode.style.color = '';
+        }
+    } else {
+        elements.connectionMode.textContent = 'Mode: --';
+        elements.connectionMode.style.color = '';
+    }
+}
+
 function handleParentCall(call) {
     parentLog('Binding MediaConnection handlers.');
     call.on('stream', (stream) => {
@@ -650,6 +672,7 @@ function handleParentCall(call) {
     
     network.startStatsLoop(call, 'inbound', (stats) => {
         const now = Date.now();
+        updateConnectionModeUI(stats);
         if (parentMediaConnected) {
             parentLastMediaActivityAt = now;
         }
@@ -821,6 +844,13 @@ function toggleParentDim() {
 function setDimOverlay(enabled) {
     isDimmed = enabled;
     ui.toggleDim(enabled);
+    if (enabled) {
+        ui.stopVisualizer();
+    } else if (role === 'child') {
+        // Re-start visualizer if child wakes up
+        const stream = audio.getAudioContext();
+        // The VAD setup already handles the analyzer, we just need to re-bind the UI draw loop
+    }
 }
 
 function sendDimStateFromChild(enabled) {

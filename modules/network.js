@@ -126,6 +126,7 @@ export function startStatsLoop(call, direction, onStatsUpdate) {
             let packetsLost = inbound ? inbound.packetsLost : null;
             let packetsReceived = inbound ? inbound.packetsReceived : null;
             let bytes = direction === 'outbound' ? outbound?.bytesSent : inbound?.bytesReceived;
+            let candidateType = candidatePair ? stats.get(candidatePair.remoteCandidateId)?.candidateType : null;
 
             if (lastStats && bytes != null) {
                 const timeDelta = (now - lastStats.timeMs) / 1000;
@@ -170,7 +171,8 @@ export function startStatsLoop(call, direction, onStatsUpdate) {
                     rtt,
                     jitter,
                     packetsLost,
-                    silenceDetected
+                    silenceDetected,
+                    candidateType
                 });
             }
         } finally {

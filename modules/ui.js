@@ -22,6 +22,7 @@ export const elements = typeof document !== 'undefined' ? {
     debugLog: document.getElementById('debug-log'),
     stateSummaryEl: document.getElementById('state-summary'),
     statusText: document.getElementById('status-text'),
+    connectionMode: document.getElementById('connection-mode'),
     btnDimParent: document.getElementById('btn-dim-parent'),
     whiteNoiseToggle: document.getElementById('white-noise-toggle'),
     whiteNoiseVolumeInput: document.getElementById('white-noise-volume'),
@@ -53,11 +54,15 @@ export function updateConnectionStatus(state, text) {
 }
 
 export function toggleDim(force) {
-    const isDimmed = elements.dimOverlay.classList.toggle('active', force);
+    // If force is true, we want to SHOW the overlay (remove .hidden)
+    // If force is false, we want to HIDE the overlay (add .hidden)
+    const isVisible = force;
+    elements.dimOverlay.classList.toggle('hidden', !isVisible);
+    
     if (elements.btnDimParent) {
-        elements.btnDimParent.textContent = isDimmed ? 'Undim Screen' : 'Dim Screen';
+        elements.btnDimParent.textContent = isVisible ? 'Undim Screen' : 'Dim Screen';
     }
-    return isDimmed;
+    return isVisible;
 }
 
 let visualizerActive = false;

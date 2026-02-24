@@ -18,7 +18,7 @@ export const CRY_CONFIG = {
 };
 
 export const NETWORK_CONFIG = {
-    lowBandwidth: false,
+    lowBandwidth: true,
     bitrateLevelsKbps: [32, 48, 64],
     lowBandwidthLevelsKbps: [12, 24, 48],
     ...runtimeNetwork
@@ -33,23 +33,25 @@ export const BITRATE_STEP_UP_AFTER = 4; // consecutive good intervals
 
 const baseIceServers = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-    { urls: ['stun:stun2.l.google.com:19302', 'stun:stun3.l.google.com:19302'] }
+    { urls: ['stun:stun2.l.google.com:19302', 'stun:stun3.l.google.com:19302'] },
+    { urls: ['stun:stun4.l.google.com:19302', 'stun:stun.services.mozilla.com'] }
 ];
 
 const turnIceServers = [];
 if (runtimeTurn) {
     const turnEntries = Array.isArray(runtimeTurn) ? runtimeTurn : [runtimeTurn];
     turnEntries.forEach((entry) => {
-        if (!entry || (!entry.urls && typeof entry !== 'string')) return;
+        if (!entry) return;
         if (typeof entry === 'string') {
             turnIceServers.push({ urls: entry });
             return;
         }
-        turnIceServers.push({
-            urls: entry.urls,
-            username: entry.username,
-            credential: entry.credential
-        });
+        if (entry.urls) {
+            const server = { urls: entry.urls };
+            if (entry.username) server.username = entry.username;
+            if (entry.credential) server.credential = entry.credential;
+            turnIceServers.push(server);
+        }
     });
 }
 

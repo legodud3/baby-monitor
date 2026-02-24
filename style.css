@@ -504,8 +504,8 @@ footer {
     touch-action: manipulation;
 }
 
-.hidden {
-    display: none !important;
+#dim-overlay.hidden {
+    display: none;
 }
 
 #debug-panel {

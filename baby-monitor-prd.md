@@ -1,8 +1,8 @@
 PRD: KGBaby v0.1 (Audio Monitor)
-Objective: A privacy-first, browser-based audio monitor that allows one device (Child) to stream audio to another (Parent) with zero latency over a local network.
+Objective: A browser-based audio monitor that allows one device (Child) to stream audio to another (Parent) with low latency.
 
 1. Core Functionality
-The app functions as a peer-to-peer (P2P) bridge. There are two primary modes of operation.
+The app functions as a peer-to-peer (P2P) bridge, with relay support for restrictive networks. There are two primary modes of operation.
 
 A. The Child Mode (The "Sender")
 Automatic Start: Once selected, the mic initializes immediately.
@@ -10,7 +10,7 @@ Acoustic Settings: Uses specific WebRTC constraints to optimize for a baby's roo
 echoCancellation: false (Not needed since the child phone isn't playing audio; disabling this improves clarity).
 noiseSuppression: true (To filter out white noise machines or fans).
 autoGainControl: true (Ensures that even a faint whimper is amplified).
-Privacy Guard: A persistent "Recording" indicator (standard in browsers) and an on-screen "Mic Active" status.
+Link Status: A persistent "Recording" indicator (standard in browsers) and an on-screen "Mic Active" status.
 B. The Parent Mode (The "Listener")
 Auto-Play Loophole: Requires a "Start Listening" button click to satisfy browser security policies for audio playback.
 Visual Audio Meter: A CSS-based volume bar that moves even if the parent has their phone volume low. This provides visual confirmation that "the link is alive."

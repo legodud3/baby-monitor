@@ -5,7 +5,7 @@ This document explains the technical and UX decisions in the current release.
 ## Core Architecture
 
 - **WebRTC via PeerJS (P2P)**
-  - Why: Keeps audio path direct for low latency and privacy.
+  - Why: Keeps audio path direct for low latency whenever possible.
   - Tradeoff: Some networks still require TURN fallback.
 
 - **Native ES Modules (No-Build)**
