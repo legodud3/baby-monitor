@@ -41,6 +41,10 @@ export const elements = typeof document !== 'undefined' ? {
 } : {};
 
 export function showScreen(screenId) {
+    if (!elements.landingScreen || !elements.monitorScreen) {
+        console.error('[UI] Missing screen elements: #landing-screen and/or #monitor-screen');
+        return;
+    }
     elements.landingScreen.classList.add('hidden');
     elements.monitorScreen.classList.add('hidden');
     if (screenId === 'landing') {
