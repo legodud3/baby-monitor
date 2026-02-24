@@ -32,25 +32,45 @@ let transmitMixNode = null;
 let onElevatedActivity = null;
 let onStateChange = null;
 
+/**
+ * Initializes the audio module with callbacks for activity and state changes.
+ * @param {Object} callbacks 
+ * @param {Function} [callbacks.onElevatedActivity] - Called when loud noise is detected.
+ * @param {Function} [callbacks.onStateChange] - Called when infant state (zzz, stirring, etc) changes.
+ */
 export function initAudio(callbacks = {}) {
     onElevatedActivity = callbacks.onElevatedActivity;
     onStateChange = callbacks.onStateChange;
 }
 
+/**
+ * Requests access to the microphone and returns a MediaStream.
+ * @returns {Promise<MediaStream>}
+ */
 export async function getLocalStream() {
     log("Requesting Mic...", false);
-    const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-            echoCancellation: false,
-            noiseSuppression: true,
-            autoGainControl: true
-        },
-        video: false
-    });
-    log(`Mic Active. Tracks: ${stream.getTracks().length}`, false);
-    return stream;
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: true,
+                autoGainControl: true
+            },
+            video: false
+        });
+        log(`Mic Active. Tracks: ${stream.getTracks().length}`, false);
+        return stream;
+    } catch (err) {
+        log(`Mic Request Failed: ${err.name}`, true);
+        throw err;
+    }
 }
 
+/**
+ * Sets up the Voice Activity Detection (VAD) loop on a stream.
+ * @param {MediaStream} stream 
+ * @param {Function} [visualizeCallback] - Callback for UI visualization.
+ */
 export function setupVAD(stream, visualizeCallback) {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -112,6 +132,12 @@ export function setupVAD(stream, visualizeCallback) {
     }, 100);
 }
 
+/**
+ * Sets up the audio graph for transmitting mic audio, potentially mixing in white noise cancellation.
+ * @param {MediaStream} [stream] - The mic stream. If omitted, returns existing sendStream.
+ * @param {AudioNode} [whiteNoiseCancelGainNode] - Optional node for noise cancellation.
+ * @returns {MediaStream|null}
+ */
 export function setupTransmitChain(stream, whiteNoiseCancelGainNode = null) {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -292,7 +318,10 @@ export function getAudioContext() {
     return audioCtx;
 }
 
-export function createMediaStreamDestination() {
-    const ctx = getAudioContext();
-    return ctx.createMediaStreamDestination();
-}
+// Test Hooks
+export const _testHooks = {
+    updateInfantState: (levelDb, now) => updateInfantState(levelDb, now),
+    setNoiseFloor: (db) => { noiseFloorDb = db; },
+    getInfantState: () => currentInfantState,
+    setLastNoiseTime: (ts) => { lastNoiseTime = ts; }
+};

@@ -77,7 +77,10 @@
                         <div id="white-noise-status" class="white-noise-status hidden">
                             White noise active <span id="white-noise-remaining" class="white-noise-remaining"></span>
                         </div>
-                        <button id="white-noise-cta" class="btn-secondary hidden" type="button">Tap to enable white noise</button>
+                        <div class="action-row">
+                            <button id="btn-retry-mic" class="btn-secondary btn-inline hidden" type="button">Retry Mic</button>
+                            <button id="white-noise-cta" class="btn-secondary btn-inline hidden" type="button">Tap to enable white noise</button>
+                        </div>
                     </section>
 
                     <section class="surface-card">
@@ -100,7 +103,10 @@
                             </div>
                         </div>
                         <div id="audio-status">Waiting for audio...</div>
-                        <button id="btn-listen" class="btn-primary">Start Listening</button>
+                        <div class="action-row">
+                            <button id="btn-listen" class="btn-primary">Start Listening</button>
+                            <button id="btn-reset-parent" class="btn-secondary btn-inline">Reset Connection</button>
+                        </div>
                         <button id="btn-ack-alarm" class="btn-danger hidden" type="button">I Checked The Baby</button>
                     </section>
 

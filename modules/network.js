@@ -26,10 +26,19 @@ let lastAudioEnergyTs = null;
 // Callbacks
 let callbacks = {};
 
+/**
+ * Initializes the network module with event callbacks.
+ * @param {Object} cb 
+ */
 export function initNetwork(cb) {
     callbacks = cb;
 }
 
+/**
+ * Creates a new PeerJS instance and binds event listeners.
+ * @param {string} id - The Peer ID.
+ * @returns {Peer}
+ */
 export function createPeer(id) {
     if (peer) peer.destroy();
     peer = new Peer(id, PEER_CONFIG);
@@ -44,6 +53,12 @@ export function createPeer(id) {
     return peer;
 }
 
+/**
+ * Initiates a media call to the child unit.
+ * @param {string} roomId 
+ * @param {MediaStream} silentStream - A silent stream to bootstrap the call.
+ * @returns {MediaConnection}
+ */
 export function connectToChild(roomId, silentStream) {
     if (!peer) return;
     if (currentCall) currentCall.close();
@@ -55,6 +70,11 @@ export function connectToChild(roomId, silentStream) {
     return currentCall;
 }
 
+/**
+ * Initiates a data connection to the child unit.
+ * @param {string} roomId 
+ * @returns {DataConnection}
+ */
 export function connectDataChannelToChild(roomId) {
     const targetId = `babymonitor-${roomId}-child`;
     if (dataConn && dataConn.open) return dataConn;
@@ -64,6 +84,10 @@ export function connectDataChannelToChild(roomId) {
     return dataConn;
 }
 
+/**
+ * Broadcasts data to all connected parent units (used by Child).
+ * @param {any} data 
+ */
 export function broadcastToParents(data) {
     parentDataConns.forEach((conn, peerId) => {
         if (!conn || !conn.open) {
@@ -79,6 +103,10 @@ export function broadcastToParents(data) {
     });
 }
 
+/**
+ * Sends data to the child unit (used by Parent).
+ * @param {any} data 
+ */
 export function sendToChild(data) {
     if (dataConn && dataConn.open) {
         dataConn.send(data);
@@ -92,6 +120,12 @@ export function getChildCalls() { return childCalls; }
 export function getPendingChildCalls() { return pendingChildCalls; }
 export function setPendingChildCalls(val) { pendingChildCalls = val; }
 
+/**
+ * Starts a statistics collection loop for an active call.
+ * @param {MediaConnection} call 
+ * @param {'outbound'|'inbound'} direction 
+ * @param {Function} onStatsUpdate - Callback with stats object.
+ */
 export function startStatsLoop(call, direction, onStatsUpdate) {
     if (!call || !call.peerConnection) return;
     if (statsInterval) clearInterval(statsInterval);

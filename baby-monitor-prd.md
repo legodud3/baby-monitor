@@ -25,15 +25,25 @@ Battery Optimization: Includes a "Dim Screen" overlay (a black div with 90% opac
 Phase 3: Reliability & Reconnection
 Connection Heartbeat: If the Wi-Fi blips, the Parent device detects the on('close') event and attempts to auto-reconnect every 5 seconds.
 Connection Status: A simple Red/Green dot indicating if the P2P link is active.
-3. UI/UX Design (Mobile First)
+3. Quality & Reliability
+Phase 1: Automated Relay Diagnostics
+The app automatically identifies the ICE connection path (Direct vs Relay).
+The Parent Unit displays the current connection mode in real-time, providing transparency about data usage and privacy.
+Phase 2: Error Recovery
+Interactive recovery controls ("Retry Mic" and "Reset Connection") allow users to recover from transient failures without a full page reload.
+Comprehensive logging of the signal path and media stats provides immediate feedback on connection health.
+Phase 3: Battery Optimization
+Automatic throttling of high-CPU UI tasks (like the audio visualizer) when the screen is dimmed to maximize overnight battery life.
+
+4. UI/UX Design (Mobile First)
 The interface should be high-contrast and easy to use in a dark room.
 Dark Mode Default: Deep blacks and soft greens to avoid "blue light" wakefulness.
 Big Buttons: Touch targets for "Start" and "Stop" must be large.
 Volume Visualizer: A simple vertical bar that turns orange/red when the baby's room exceeds a certain decibel threshold.
-4. Technical Constraints
+5. Technical Constraints
 Security: Must be hosted on HTTPS (GitHub Pages is fine).
 Network: Best performance on the same Wi-Fi. If using 5G to Wi-Fi, PeerJS will automatically try to negotiate a STUN connection.
 Browser: Optimized for iOS Safari and Android Chrome.
-5. Success Metrics
+6. Success Metrics
 Latency: Audio delay should be <100ms.
 Stability: Must maintain a continuous stream for ≥8 hours (overnight).

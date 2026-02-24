@@ -209,6 +209,11 @@ function attachEventListeners() {
     elements.roomIdInput.addEventListener('input', updateConnectState);
     elements.btnCopyCode.addEventListener('click', copyJoinCode);
     elements.btnNewCode.addEventListener('click', regenerateJoinCode);
+    elements.btnRetryMic.addEventListener('click', startChildStreaming);
+    elements.btnResetParent.addEventListener('click', () => {
+        resetParentRetry();
+        connectToChild();
+    });
     
     elements.dimOverlay.addEventListener('click', (e) => {
         if (role !== 'child') return;
@@ -375,6 +380,7 @@ async function initChildFlow() {
 
 async function startChildStreaming() {
     try {
+        elements.btnRetryMic.classList.add('hidden');
         childLog('Starting local audio capture for child stream.');
         const stream = await audio.getLocalStream();
         const tracks = stream?.getTracks?.() || [];
@@ -399,7 +405,14 @@ async function startChildStreaming() {
     } catch (err) {
         utils.log(`Mic Error: ${err.message}`, true);
         childLog(`Mic setup failed: ${formatError(err)}`, true);
-        alert('Microphone access denied: ' + err.message);
+        elements.btnRetryMic.classList.remove('hidden');
+        if (err.name === 'NotAllowedError') {
+            alert('Microphone access was denied. Please check site permissions.');
+        } else if (err.name === 'NotFoundError') {
+            alert('No microphone was found on this device.');
+        } else {
+            alert('Microphone initialization failed: ' + err.message);
+        }
     }
 }
 
@@ -620,11 +633,20 @@ function connectToChild() {
     createParentDataChannel('initial');
 }
 
+let lastCandidateTypeReported = null;
 function updateConnectionModeUI(stats) {
     if (!elements.connectionMode) return;
     
     if (stats && stats.candidateType) {
         const type = stats.candidateType;
+        
+        if (type !== lastCandidateTypeReported) {
+            const logMsg = `ICE Path established via: ${type.toUpperCase()}`;
+            if (role === 'child') childLog(logMsg);
+            else parentLog(logMsg);
+            lastCandidateTypeReported = type;
+        }
+
         if (type === 'host' || type === 'srflx') {
             elements.connectionMode.textContent = 'Mode: Direct (Private)';
             elements.connectionMode.style.color = '#7bf1b6';

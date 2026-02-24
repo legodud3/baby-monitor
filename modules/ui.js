@@ -16,6 +16,8 @@ export const elements = typeof document !== 'undefined' ? {
     dimOverlay: document.getElementById('dim-overlay'),
     btnStop: document.getElementById('btn-stop'),
     btnListen: document.getElementById('btn-listen'),
+    btnRetryMic: document.getElementById('btn-retry-mic'),
+    btnResetParent: document.getElementById('btn-reset-parent'),
     audioStatus: document.getElementById('audio-status'),
     vadStatus: document.getElementById('vad-status'),
     wakeLockVideo: document.getElementById('wake-lock-video'),

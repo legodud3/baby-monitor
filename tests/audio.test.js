@@ -26,3 +26,41 @@ test('updateNoiseFloor tracks quiet levels and ignores sudden spikes', (t) => {
     floor = updateNoiseFloor(-20, 100, floor); 
     assert.strictEqual(floor, floorBeforeSpike); // MarginDb check should block this
 });
+
+import { _testHooks } from '../modules/audio.js';
+
+test('infant state transitions correctly', (t) => {
+    const { updateInfantState, setNoiseFloor, getInfantState, setLastNoiseTime } = _testHooks;
+    
+    const noiseFloor = -50;
+    setNoiseFloor(noiseFloor);
+    let now = Date.now();
+    
+    // Initial state
+    assert.strictEqual(getInfantState(), 'zzz');
+    
+    // Stirring: slightly above noise floor (e.g., 7dB above) triggers stirring immediately
+    const stirringLevel = noiseFloor + 7; 
+    updateInfantState(stirringLevel, now);
+    assert.strictEqual(getInfantState(), 'stirring');
+    
+    // Settle back to zzz
+    now += 61000; // Wait for minGapMs (60s)
+    setLastNoiseTime(now - 61000); 
+    updateInfantState(noiseFloor - 10, now); 
+    assert.strictEqual(getInfantState(), 'zzz');
+
+    // Needs Care: significantly above noise floor for a long time
+    now += 61000; // Wait for minGapMs (60s) before trying another non-critical transition
+    const loudLevel = noiseFloor + 15;
+    updateInfantState(loudLevel, now); 
+    assert.strictEqual(getInfantState(), 'zzz'); // Not enough time even for stirring at this level yet
+    
+    now += 3000; // 3 seconds later
+    updateInfantState(loudLevel, now);
+    assert.strictEqual(getInfantState(), 'stirring'); // 2s reached
+    
+    now += 121000; // Over 120 seconds later
+    updateInfantState(loudLevel, now);
+    assert.strictEqual(getInfantState(), 'needsCare'); // needsCare bypasses the 60s gap check for transition IN
+});
