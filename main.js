@@ -133,6 +133,44 @@ function attachParentPeerConnectionDebug(call) {
     }, 200);
 }
 
+function attachChildPeerConnectionDebug(call) {
+    if (!call) return;
+    const attach = () => {
+        const pc = call.peerConnection;
+        if (!pc) return false;
+        if (pc.__kgbabyChildDebugAttached) return true;
+
+        pc.__kgbabyChildDebugAttached = true;
+        childLog(`RTCPeerConnection ready (child): signaling=${pc.signalingState}, ice=${pc.iceConnectionState}, conn=${pc.connectionState}`);
+
+        pc.addEventListener('iceconnectionstatechange', () => {
+            childLog(`ICE state (child) -> ${pc.iceConnectionState}`);
+            if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                setStatusText('connected');
+            } else if (pc.iceConnectionState === 'failed') {
+                setStatusText('disconnected');
+            }
+        });
+        pc.addEventListener('connectionstatechange', () => {
+            childLog(`Peer connection state (child) -> ${pc.connectionState}`);
+        });
+        return true;
+    };
+
+    if (attach()) return;
+    let attempts = 0;
+    const timer = setInterval(() => {
+        attempts += 1;
+        if (attach()) {
+            clearInterval(timer);
+            return;
+        }
+        if (attempts >= 10) {
+            clearInterval(timer);
+        }
+    }, 200);
+}
+
 function isPeerJsAvailable() {
     if (typeof window.Peer !== 'undefined') return true;
     ui.showScreen('landing');
@@ -350,7 +388,10 @@ async function startChildStreaming() {
         // Answer pending calls
         const pending = network.getPendingChildCalls();
         childLog(`Pending unanswered calls queued while mic initializing: ${pending.length}`);
-        pending.forEach(call => call.answer(sendStream));
+        pending.forEach(call => {
+            attachChildPeerConnectionDebug(call);
+            call.answer(sendStream);
+        });
         if (pending.length > 0) {
             childLog(`Answered ${pending.length} pending calls after mic initialization.`);
         }
@@ -371,6 +412,7 @@ function handleIncomingCall(call) {
         return;
     }
     childLog('Answering incoming media call with active transmit stream.');
+    attachChildPeerConnectionDebug(call);
     call.answer(stream);
     network.getChildCalls().set(call.peer, call);
     childLog(`Active child calls=${network.getChildCalls().size}`);

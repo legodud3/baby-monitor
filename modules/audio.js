@@ -41,7 +41,7 @@ export async function getLocalStream() {
     log("Requesting Mic...", false);
     const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-            echoCancellation: true,
+            echoCancellation: false,
             noiseSuppression: true,
             autoGainControl: true
         },
@@ -100,7 +100,7 @@ export function setupVAD(stream, visualizeCallback) {
             lastNoiseTime = now;
         }
         
-        if (logCounter % 50 === 0) {
+        if (logCounter % 100 === 0) {
             console.log(`VAD: dB=${levelDb.toFixed(1)}, Threshold=${vadThresholdDb !== null ? vadThresholdDb.toFixed(1) : 'n/a'}, Active=${isTransmitting}`);
         }
         logCounter++;
@@ -109,7 +109,7 @@ export function setupVAD(stream, visualizeCallback) {
             ensureTransmission(true);
         }
 
-    }, 250);
+    }, 100);
 }
 
 export function setupTransmitChain(stream, whiteNoiseCancelGainNode = null) {
