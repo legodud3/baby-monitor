@@ -49,6 +49,7 @@ let heartbeatInterval = null;
 let lastHeartbeatAt = 0;
 let parentConnectionState = 'idle';
 let parentPeerId = null;
+let turnAvailabilityLogged = false;
 
 const PARENT_CONNECTION_STATES = Object.freeze({
     IDLE: 'idle',
@@ -117,6 +118,8 @@ function logBuildFingerprint(stage) {
 }
 
 function logTurnAvailability() {
+    if (turnAvailabilityLogged) return;
+    turnAvailabilityLogged = true;
     const iceServers = config.ICE_SERVERS || [];
     const turnCount = iceServers.reduce((count, server) => {
         const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
@@ -126,8 +129,14 @@ function logTurnAvailability() {
     if (turnCount > 0) {
         utils.log(`[NET] TURN relay configured. turnServerEntries=${turnCount}`);
     } else {
-        utils.log('[NET] TURN relay unavailable (no TURN_CONFIG found). Using direct/STUN only.', true);
+        utils.log('[NET] TURN not configured (optional). Running direct/STUN mode.');
     }
+}
+
+function setConnectionModeText(text, color = '') {
+    if (!elements.connectionMode) return;
+    elements.connectionMode.textContent = text;
+    elements.connectionMode.style.color = color;
 }
 
 function setParentConnectionState(nextState, reason = 'unspecified', extra = {}) {
@@ -136,22 +145,27 @@ function setParentConnectionState(nextState, reason = 'unspecified', extra = {})
     parentLog(`State transition: ${prevState} -> ${nextState} (reason=${reason})`);
 
     if (nextState === PARENT_CONNECTION_STATES.SIGNALING) {
+        setConnectionModeText('Mode: Signaling');
         setStatusText('waiting', 'serverLink');
         return;
     }
     if (nextState === PARENT_CONNECTION_STATES.NEGOTIATING) {
+        setConnectionModeText('Mode: Negotiating WebRTC');
         setStatusText('waiting', 'handshake');
         return;
     }
     if (nextState === PARENT_CONNECTION_STATES.MEDIA_UP) {
+        setConnectionModeText('Mode: Connected (pending path)');
         setStatusText('connected', 'active');
         return;
     }
     if (nextState === PARENT_CONNECTION_STATES.DEGRADED || nextState === PARENT_CONNECTION_STATES.RETRYING) {
+        setConnectionModeText('Mode: Reconnecting');
         setStatusText('waiting', 'interrupted');
         return;
     }
     if (nextState === PARENT_CONNECTION_STATES.FAILED) {
+        setConnectionModeText('Mode: Connection lost');
         setStatusText('disconnected', 'failure');
         return;
     }
@@ -455,10 +469,12 @@ async function startSession(roleChoice) {
     setStatusText('waiting', 'appStart');
     
     if (role === 'child') {
+        elements.btnResetParent.classList.add('hidden');
         elements.childControls.classList.remove('hidden');
         elements.parentControls.classList.add('hidden');
         initChildFlow();
     } else {
+        elements.btnResetParent.classList.remove('hidden');
         elements.parentControls.classList.remove('hidden');
         elements.childControls.classList.add('hidden');
         initParentFlow();
@@ -487,8 +503,10 @@ function setStatusText(state, stage = null) {
     } else {
         baseText = `${label} · ${idLabel}: ${baby}`;
     }
-    const fullText = `${baseText} · ${buildTag()}`;
-    ui.updateConnectionStatus(resolvedState, fullText);
+    ui.updateConnectionStatus(resolvedState, baseText);
+    if (elements.buildText) {
+        elements.buildText.textContent = buildTag();
+    }
 
     if (role === 'parent') {
         parentLog(`Status UI -> ${resolvedState}/${resolvedStage} (${elements.statusText.textContent})`);
@@ -838,18 +856,16 @@ function updateConnectionModeUI(stats) {
         }
 
         if (type === 'host' || type === 'srflx') {
-            elements.connectionMode.textContent = 'Mode: Direct (Private)';
-            elements.connectionMode.style.color = '#7bf1b6';
+            setConnectionModeText('Mode: Direct (Private)', '#7bf1b6');
         } else if (type === 'relay') {
-            elements.connectionMode.textContent = 'Mode: Relay (Metered)';
-            elements.connectionMode.style.color = '#ffd576';
+            setConnectionModeText('Mode: Relay (TURN)', '#ffd576');
         } else {
-            elements.connectionMode.textContent = `Mode: ${type}`;
-            elements.connectionMode.style.color = '';
+            setConnectionModeText(`Mode: ${type}`);
         }
     } else {
-        elements.connectionMode.textContent = 'Mode: --';
-        elements.connectionMode.style.color = '';
+        if (role !== 'parent') {
+            setConnectionModeText('Mode: --');
+        }
     }
 }
 
@@ -867,9 +883,19 @@ function handleParentCall(call) {
         parentLog(`attempt connected: media stream received (attempt #${parentConnectAttempt})`);
         setParentConnectionState(PARENT_CONNECTION_STATES.MEDIA_UP, 'media-stream-received');
         logParentAttemptDiagnostic('attempt_connected_media', { tracks: tracks.length });
+        elements.btnListen.classList.add('hidden');
+        elements.audioStatus.textContent = 'Starting audio playback...';
         audio.startPlayback(stream, (prefix, analyser) => ui.visualize(prefix, analyser))
-            .then(() => parentLog('Remote audio playback started.'))
-            .catch((err) => parentLog(`Remote audio playback failed: ${formatError(err)}`, true));
+            .then(() => {
+                parentLog('Remote audio playback started.');
+                elements.btnListen.classList.add('hidden');
+                elements.audioStatus.textContent = 'Listening live.';
+            })
+            .catch((err) => {
+                parentLog(`Remote audio playback failed: ${formatError(err)}`, true);
+                elements.btnListen.classList.remove('hidden');
+                elements.audioStatus.textContent = 'Tap Start Listening (autoplay blocked).';
+            });
     });
     
     call.on('close', () => {
@@ -1067,17 +1093,30 @@ function startHeartbeatWatchdog() {
 // UI Actions
 function resumeAudio() {
     audio.getAudioContext().resume().then(() => {
-        elements.btnListen.style.display = 'none';
+        const remoteAudio = document.getElementById('remote-audio');
+        if (remoteAudio) {
+            return remoteAudio.play();
+        }
+        return null;
+    }).then(() => {
+        elements.btnListen.classList.add('hidden');
+        elements.audioStatus.textContent = 'Listening live.';
+    }).catch((err) => {
+        parentLog(`Manual start listening failed: ${formatError(err)}`, true);
+        elements.btnListen.classList.remove('hidden');
     });
 }
 
 function toggleParentDim() {
     isDimmed = !isDimmed;
-    ui.toggleDim(isDimmed);
+    if (elements.btnDimParent) {
+        elements.btnDimParent.textContent = isDimmed ? 'Undim Child Screen' : 'Dim Child Screen';
+    }
     network.sendToChild({ type: 'dim', enabled: isDimmed });
 }
 
 function setDimOverlay(enabled) {
+    if (role !== 'child') return;
     isDimmed = enabled;
     ui.toggleDim(enabled);
     if (enabled) {

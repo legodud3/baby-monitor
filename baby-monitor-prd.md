@@ -1,4 +1,4 @@
-PRD: KGBaby v0.4.1 (Audio Monitor)
+PRD: KGBaby v0.4.2 (Audio Monitor)
 Objective: A browser-based audio monitor that allows one device (Child) to stream audio to one or more Parent devices with low latency and robust fallback behavior on restrictive networks.
 
 1. Core Functionality

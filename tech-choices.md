@@ -1,4 +1,4 @@
-# Tech Choices and Design Rationale (KGBaby v0.4.1)
+# Tech Choices and Design Rationale (KGBaby v0.4.2)
 
 This document explains the technical and UX decisions in the current release.
 

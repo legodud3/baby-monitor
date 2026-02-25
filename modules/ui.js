@@ -24,6 +24,7 @@ export const elements = typeof document !== 'undefined' ? {
     debugLog: document.getElementById('debug-log'),
     stateSummaryEl: document.getElementById('state-summary'),
     statusText: document.getElementById('status-text'),
+    buildText: document.getElementById('build-text'),
     connectionMode: document.getElementById('connection-mode'),
     btnDimParent: document.getElementById('btn-dim-parent'),
     whiteNoiseToggle: document.getElementById('white-noise-toggle'),

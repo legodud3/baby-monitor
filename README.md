@@ -1,4 +1,4 @@
-# KGBaby v0.4.1 - Private Browser Baby Monitor
+# KGBaby v0.4.2 - Private Browser Baby Monitor
 
 A secure, low-latency audio monitor that runs in the browser using WebRTC (PeerJS) with direct-path preference and TURN fallback.
 
@@ -13,7 +13,7 @@ A secure, low-latency audio monitor that runs in the browser using WebRTC (PeerJ
 - **Fail-Safe Alarm Skeleton**: Parent supports heartbeat watchdog checks with an alarm acknowledgment flow.
 - **Local Persistence**: White-noise and infant-state context are stored per join code in local browser storage.
 - **Reliability Guards**: Auto-reconnect handling, wake-lock support, build fingerprint logging, data-channel watchdogs, and media-aware alarm gating.
-- **v0.4.1 Stabilization Layer**: Parent connection state machine, preflight checks, structured attempt diagnostics, bounded retries, and peer hard-reset after repeated failures.
+- **v0.4.2 UX + Stability Layer**: Auto parent playback with fallback, child-only dim control, clear mode staging, header reset control, and non-alarming TURN-optional diagnostics.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ A secure, low-latency audio monitor that runs in the browser using WebRTC (PeerJ
 4. Enter that same join code on parent.
 5. (Optional) Set a baby name label on each device for friendly UI text.
 6. Tap `Connect`.
-7. On parent, tap `Start Listening` if autoplay is blocked.
+7. Parent starts listening automatically; tap `Start Listening` only if autoplay is blocked by the browser.
 
 ## Recommended Setup
 
@@ -96,7 +96,7 @@ Note:
 - To enable relay fallback, provide a local/private `secrets.js` that sets `window.TURN_CONFIG`.
 - Startup logs indicate mode:
   - TURN present: `[NET] TURN relay configured. turnServerEntries=N`
-  - TURN absent: `[NET] TURN relay unavailable (no TURN_CONFIG found). Using direct/STUN only.`
+  - TURN absent: `[NET] TURN not configured (optional). Running direct/STUN mode.`
 
 ## Troubleshooting
 
