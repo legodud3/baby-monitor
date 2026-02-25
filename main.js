@@ -29,6 +29,8 @@ let whiteNoiseStartedAt = null;
 let parentRetryDelay = 3000;
 let parentRetryTimeout = null;
 let parentConnectAttempt = 0;
+let parentConsecutiveFailures = 0;
+let parentPeerResetCount = 0;
 let parentStatsLastLogAt = 0;
 let parentHeartbeatCount = 0;
 let parentHeartbeatWarningShown = false;
@@ -45,6 +47,20 @@ let childStatsLastLogAt = 0;
 let wakeLock = null;
 let heartbeatInterval = null;
 let lastHeartbeatAt = 0;
+let parentConnectionState = 'idle';
+let parentPeerId = null;
+
+const PARENT_CONNECTION_STATES = Object.freeze({
+    IDLE: 'idle',
+    SIGNALING: 'signaling',
+    NEGOTIATING: 'negotiating',
+    MEDIA_UP: 'media_up',
+    DEGRADED: 'degraded',
+    RETRYING: 'retrying',
+    FAILED: 'failed'
+});
+
+const PARENT_MAX_CONSECUTIVE_FAILURES_BEFORE_PEER_RESET = 4;
 
 const STATUS_STAGE_LABELS = Object.freeze({
     parent: Object.freeze({
@@ -71,6 +87,7 @@ const STATUS_STAGE_LABELS = Object.freeze({
 function init() {
     if (!isPeerJsAvailable()) return;
     logBuildFingerprint('init');
+    logTurnAvailability();
     restoreLastSession();
     attachEventListeners();
     updateConnectState();
@@ -97,6 +114,76 @@ function statusLabelForStage(stage, state) {
 
 function logBuildFingerprint(stage) {
     utils.log(`[BUILD] id=${config.APP_BUILD_ID} stage=${stage} url=${window.location.href}`);
+}
+
+function logTurnAvailability() {
+    const iceServers = config.ICE_SERVERS || [];
+    const turnCount = iceServers.reduce((count, server) => {
+        const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+        const hasTurn = urls.some((url) => typeof url === 'string' && /^turns?:/i.test(url));
+        return count + (hasTurn ? 1 : 0);
+    }, 0);
+    if (turnCount > 0) {
+        utils.log(`[NET] TURN relay configured. turnServerEntries=${turnCount}`);
+    } else {
+        utils.log('[NET] TURN relay unavailable (no TURN_CONFIG found). Using direct/STUN only.', true);
+    }
+}
+
+function setParentConnectionState(nextState, reason = 'unspecified', extra = {}) {
+    const prevState = parentConnectionState;
+    parentConnectionState = nextState;
+    parentLog(`State transition: ${prevState} -> ${nextState} (reason=${reason})`);
+
+    if (nextState === PARENT_CONNECTION_STATES.SIGNALING) {
+        setStatusText('waiting', 'serverLink');
+        return;
+    }
+    if (nextState === PARENT_CONNECTION_STATES.NEGOTIATING) {
+        setStatusText('waiting', 'handshake');
+        return;
+    }
+    if (nextState === PARENT_CONNECTION_STATES.MEDIA_UP) {
+        setStatusText('connected', 'active');
+        return;
+    }
+    if (nextState === PARENT_CONNECTION_STATES.DEGRADED || nextState === PARENT_CONNECTION_STATES.RETRYING) {
+        setStatusText('waiting', 'interrupted');
+        return;
+    }
+    if (nextState === PARENT_CONNECTION_STATES.FAILED) {
+        setStatusText('disconnected', 'failure');
+        return;
+    }
+}
+
+function logParentAttemptDiagnostic(reasonCode, extra = {}) {
+    const diagnostic = {
+        reasonCode,
+        attempt: parentConnectAttempt,
+        roomId,
+        targetPeerId: roomId ? `babymonitor-${roomId}-child` : null,
+        parentPeerId,
+        parentState: parentConnectionState,
+        mediaConnected: parentMediaConnected,
+        dataOpen: parentDataChannelOpen,
+        heartbeatAgeMs: lastHeartbeatAt ? (Date.now() - lastHeartbeatAt) : null,
+        turnConfigured: (config.ICE_SERVERS || []).some((server) => {
+            const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+            return urls.some((url) => typeof url === 'string' && /^turns?:/i.test(url));
+        }),
+        ...extra
+    };
+    parentLog(`Diagnostic: ${JSON.stringify(diagnostic)}`, reasonCode !== 'attempt_connected_media' && reasonCode !== 'attempt_connected_data');
+}
+
+function hardResetParentPeer(reason) {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    parentPeerId = `babymonitor-${roomId}-parent-${suffix}`;
+    parentPeerResetCount += 1;
+    parentLog(`Hard reset parent peer (#${parentPeerResetCount}) reason=${reason} newPeerId=${parentPeerId}`, true);
+    setParentConnectionState(PARENT_CONNECTION_STATES.SIGNALING, 'peer-hard-reset', { reason });
+    network.createPeer(parentPeerId);
 }
 
 function parentLog(message, isError = false) {
@@ -291,6 +378,40 @@ function updateConnectState() {
     elements.btnConnect.disabled = !(utils.isValidJoinCode(joinCode) && selectedRole);
 }
 
+async function runSessionPreflight(roleChoice) {
+    const checks = {
+        peerLoaded: typeof window.Peer !== 'undefined',
+        online: navigator.onLine !== false,
+        role: roleChoice,
+        audioContextReady: false,
+        mediaDevicesReady: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+    };
+
+    try {
+        const ctx = audio.getAudioContext();
+        checks.audioContextReady = !!ctx;
+    } catch (err) {
+        checks.audioContextReady = false;
+    }
+
+    if (roleChoice === 'child' && !checks.mediaDevicesReady) {
+        utils.log(`[PREFLIGHT] ${JSON.stringify(checks)}`, true);
+        alert('This browser does not support microphone capture APIs required for Child mode.');
+        return false;
+    }
+    if (!checks.peerLoaded) {
+        utils.log(`[PREFLIGHT] ${JSON.stringify(checks)}`, true);
+        alert('PeerJS is not loaded. Refresh and try again.');
+        return false;
+    }
+
+    if (!checks.online) {
+        utils.log('[PREFLIGHT] Browser reports offline mode. Connect may fail.', true);
+    }
+    utils.log(`[PREFLIGHT] ${JSON.stringify(checks)}`);
+    return true;
+}
+
 function copyJoinCode() {
     const joinCode = utils.normalizeJoinCode(elements.roomIdInput.value);
     navigator.clipboard.writeText(joinCode).then(() => {
@@ -304,6 +425,8 @@ function regenerateJoinCode() {
 }
 
 async function startSession(roleChoice) {
+    const preflightOk = await runSessionPreflight(roleChoice);
+    if (!preflightOk) return;
     role = roleChoice;
     currentStatusStage = null;
     const joinCode = utils.normalizeJoinCode(elements.roomIdInput.value);
@@ -579,7 +702,9 @@ function createParentDataChannel(reason) {
         parentDataChannelOpen = true;
         parentDataMissingLogShown = false;
         clearParentDataChannelOpenTimeout();
+        parentConsecutiveFailures = 0;
         parentLog(`attempt connected: data channel open (attempt #${parentConnectAttempt})`);
+        logParentAttemptDiagnostic('attempt_connected_data');
         alarm.clearAlarmGrace();
     });
     dataConn.on('close', () => {
@@ -598,7 +723,9 @@ function createParentDataChannel(reason) {
     if (dataConn.open) {
         parentDataChannelOpen = true;
         clearParentDataChannelOpenTimeout();
+        parentConsecutiveFailures = 0;
         parentLog(`attempt connected: data channel open (attempt #${parentConnectAttempt})`);
+        logParentAttemptDiagnostic('attempt_connected_data');
     } else {
         parentDataChannelOpen = false;
         scheduleParentDataChannelOpenTimeout(dataConn, reason);
@@ -607,19 +734,22 @@ function createParentDataChannel(reason) {
 
 function initParentFlow() {
     const parentSuffix = Math.random().toString(36).slice(2, 8);
-    const myId = `babymonitor-${roomId}-parent-${parentSuffix}`;
-    parentLog(`Initializing parent flow. peerId=${myId}, room=${roomId}`);
+    parentPeerId = `babymonitor-${roomId}-parent-${parentSuffix}`;
+    parentLog(`Initializing parent flow. peerId=${parentPeerId}, room=${roomId}`);
     clearParentDataChannelOpenTimeout();
     parentDataChannelRetryCount = 0;
+    parentConsecutiveFailures = 0;
+    parentPeerResetCount = 0;
     parentHeartbeatAlarmActive = false;
     parentMediaConnected = false;
     parentLastMediaActivityAt = 0;
-    setStatusText('waiting', 'serverLink');
+    setParentConnectionState(PARENT_CONNECTION_STATES.SIGNALING, 'parent-flow-init');
     
     network.initNetwork({
         onOpen: (id) => {
             utils.log(`Network open. ID: ${id}`);
             parentLog(`Peer open. id=${id}. Beginning child connect sequence.`);
+            setParentConnectionState(PARENT_CONNECTION_STATES.SIGNALING, 'peer-open');
             setStatusText('waiting', 'discovery');
             resetParentRetry();
             connectToChild();
@@ -633,23 +763,24 @@ function initParentFlow() {
             if (err?.type === 'network' || err?.type === 'socket-error' || err?.type === 'server-error') {
                 utils.log('Signal server unreachable. Check captive portal/VPN/firewall or use a custom PeerJS host.', true);
             }
-            if (err?.type === 'peer-unavailable') {
-                setStatusText('waiting', 'interrupted');
-            } else {
-                setStatusText('disconnected', 'failure');
-            }
+            setParentConnectionState(PARENT_CONNECTION_STATES.DEGRADED, 'peer-error', { errorType: err?.type || 'unknown' });
+            logParentAttemptDiagnostic(`peer_error_${err?.type || 'unknown'}`, { error: formatError(err) });
             retryParentConnection();
         },
         onDisconnected: () => {
             parentLog('Peer disconnected event fired.', true);
-            setStatusText('waiting', 'interrupted');
+            setParentConnectionState(PARENT_CONNECTION_STATES.DEGRADED, 'peer-disconnected');
+            logParentAttemptDiagnostic('peer_disconnected');
+            retryParentConnection();
         },
         onClose: () => {
             parentLog('Peer close event fired.', true);
-            setStatusText('disconnected', 'failure');
+            setParentConnectionState(PARENT_CONNECTION_STATES.FAILED, 'peer-close');
+            logParentAttemptDiagnostic('peer_close');
+            retryParentConnection();
         }
     });
-    network.createPeer(myId);
+    network.createPeer(parentPeerId);
     parentLog('Peer object created.');
     
     alarm.initAlarm();
@@ -662,24 +793,34 @@ function connectToChild() {
     parentDataChannelOpen = false;
     parentDataMissingLogShown = false;
     parentLastMediaActivityAt = 0;
-    setStatusText('waiting', 'handshake');
+    setParentConnectionState(PARENT_CONNECTION_STATES.NEGOTIATING, 'connect-attempt-start');
     const targetId = `babymonitor-${roomId}-child`;
     parentLog(`Connect attempt #${parentConnectAttempt} to child peer ${targetId}`);
-    const silentDestination = audio.createMediaStreamDestination();
-    const silentTrackCount = silentDestination.stream?.getAudioTracks?.().length || 0;
-    parentLog(`Created silent upstream stream for call bootstrap. tracks=${silentTrackCount}`);
+    try {
+        const silentDestination = audio.getAudioContext().createMediaStreamDestination();
+        const silentTrackCount = silentDestination.stream?.getAudioTracks?.().length || 0;
+        parentLog(`Created silent upstream stream for call bootstrap. tracks=${silentTrackCount}`);
 
-    const call = network.connectToChild(roomId, silentDestination.stream);
-    if (!call) {
-        parentLog('network.connectToChild returned no call object (peer not ready?).', true);
-        return;
+        const call = network.connectToChild(roomId, silentDestination.stream);
+        if (!call) {
+            parentLog('network.connectToChild returned no call object (peer not ready?).', true);
+            setParentConnectionState(PARENT_CONNECTION_STATES.DEGRADED, 'missing-call-object');
+            logParentAttemptDiagnostic('missing_call_object');
+            retryParentConnection();
+            return;
+        }
+        parentLog(`MediaConnection created. peer=${call.peer || 'unknown'}`);
+        
+        handleParentCall(call);
+        attachParentPeerConnectionDebug(call);
+
+        createParentDataChannel('initial');
+    } catch (err) {
+        parentLog(`Bootstrap stream creation/connect setup failed: ${formatError(err)}`, true);
+        setParentConnectionState(PARENT_CONNECTION_STATES.DEGRADED, 'bootstrap-failure');
+        logParentAttemptDiagnostic('bootstrap_failure', { error: formatError(err) });
+        retryParentConnection();
     }
-    parentLog(`MediaConnection created. peer=${call.peer || 'unknown'}`);
-    
-    handleParentCall(call);
-    attachParentPeerConnectionDebug(call);
-
-    createParentDataChannel('initial');
 }
 
 let lastCandidateTypeReported = null;
@@ -722,8 +863,10 @@ function handleParentCall(call) {
         parentMediaConnected = true;
         parentLastMediaActivityAt = Date.now();
         parentHeartbeatAlarmActive = false;
+        parentConsecutiveFailures = 0;
         parentLog(`attempt connected: media stream received (attempt #${parentConnectAttempt})`);
-        setStatusText('connected', 'active');
+        setParentConnectionState(PARENT_CONNECTION_STATES.MEDIA_UP, 'media-stream-received');
+        logParentAttemptDiagnostic('attempt_connected_media', { tracks: tracks.length });
         audio.startPlayback(stream, (prefix, analyser) => ui.visualize(prefix, analyser))
             .then(() => parentLog('Remote audio playback started.'))
             .catch((err) => parentLog(`Remote audio playback failed: ${formatError(err)}`, true));
@@ -732,14 +875,17 @@ function handleParentCall(call) {
     call.on('close', () => {
         parentLog('MediaConnection close event fired.', true);
         parentMediaConnected = false;
-        setStatusText('waiting', 'interrupted');
+        setParentConnectionState(PARENT_CONNECTION_STATES.DEGRADED, 'media-close');
+        logParentAttemptDiagnostic('media_close');
         retryParentConnection();
     });
 
     call.on('error', (err) => {
         parentLog(`MediaConnection error: ${formatError(err)}`, true);
         parentMediaConnected = false;
-        setStatusText('waiting', 'interrupted');
+        setParentConnectionState(PARENT_CONNECTION_STATES.DEGRADED, 'media-error');
+        logParentAttemptDiagnostic('media_error', { error: formatError(err) });
+        retryParentConnection();
     });
     
     network.startStatsLoop(call, 'inbound', (stats) => {
@@ -816,9 +962,20 @@ function retryParentConnection() {
         parentLog(`Retry already scheduled. delay=${parentRetryDelay/1000}s`);
         return;
     }
+    parentConsecutiveFailures += 1;
+    setParentConnectionState(PARENT_CONNECTION_STATES.RETRYING, 'retry-scheduled');
+    logParentAttemptDiagnostic('retry_scheduled', {
+        consecutiveFailures: parentConsecutiveFailures,
+        delayMs: parentRetryDelay
+    });
+    if (parentConsecutiveFailures >= PARENT_MAX_CONSECUTIVE_FAILURES_BEFORE_PEER_RESET) {
+        parentConsecutiveFailures = 0;
+        hardResetParentPeer('max-consecutive-failures');
+        resetParentRetry();
+        return;
+    }
     utils.log(`Retrying connection in ${parentRetryDelay/1000}s...`);
     parentLog(`Scheduling retry in ${parentRetryDelay/1000}s.`);
-    setStatusText('waiting', 'interrupted');
     parentRetryTimeout = setTimeout(() => {
         parentRetryTimeout = null;
         parentLog('Retry timer fired; reconnecting now.');
@@ -832,6 +989,7 @@ function resetParentRetry() {
     if (parentRetryTimeout) clearTimeout(parentRetryTimeout);
     parentRetryTimeout = null;
     parentRetryDelay = 3000;
+    parentConsecutiveFailures = 0;
     parentLog('Retry backoff reset to 3s.');
 }
 
@@ -895,8 +1053,13 @@ function startHeartbeatWatchdog() {
             parentHeartbeatAlarmActive = true;
             parentHeartbeatWarningShown = true;
             parentLog(`Heartbeat timeout (${Math.round(decision.heartbeatAgeMs / 1000)}s) with unhealthy media. Triggering alarm.`, true);
+            setParentConnectionState(PARENT_CONNECTION_STATES.FAILED, 'watchdog-timeout');
+            logParentAttemptDiagnostic('watchdog_timeout', {
+                heartbeatAgeMs: decision.heartbeatAgeMs,
+                mediaAgeMs: decision.mediaAgeMs
+            });
             alarm.scheduleAlarm('Connection lost (Heartbeat timeout + media unhealthy)');
-            setStatusText('disconnected', 'failure');
+            retryParentConnection();
         }
     }, config.HEARTBEAT_INTERVAL_MS);
 }

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>KGBaby v0.4 - Audio Monitor</title>
+    <title>KGBaby v0.4.1 - Audio Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Sora:wght@500;700&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
         <div id="landing-screen" class="screen">
             <section class="hero-card">
                 <p class="eyebrow">Audio baby monitor</p>
-                <h1>KGBaby v0.4</h1>
+                <h1>KGBaby v0.4.1</h1>
                 <p class="hero-copy">One tap to pair devices, then monitor with low-latency audio, white noise controls, and calm infant state updates.</p>
             </section>
 
@@ -59,7 +59,7 @@
         <div id="monitor-screen" class="screen hidden">
             <header class="monitor-header">
                 <div class="header-left">
-                    <p class="app-version">KGBaby v0.4</p>
+                    <p class="app-version">KGBaby v0.4.1</p>
                     <h2 id="role-display">Role</h2>
                     <div id="state-summary" class="state-line hidden">Baby state: 😴 Zzz</div>
                 </div>
@@ -155,7 +155,23 @@
         </video>
     </div>
 
-    <script src="secrets.js"></script>
-    <script type="module" src="main.js"></script>
+    <script>
+        (function bootAppWithOptionalSecrets() {
+            const loadMain = () => {
+                const mainScript = document.createElement('script');
+                mainScript.type = 'module';
+                mainScript.src = 'main.js';
+                document.body.appendChild(mainScript);
+            };
+            const secretsScript = document.createElement('script');
+            secretsScript.src = 'secrets.js';
+            secretsScript.onload = loadMain;
+            secretsScript.onerror = () => {
+                console.warn('[BOOT] Optional secrets.js not found; continuing without TURN override.');
+                loadMain();
+            };
+            document.body.appendChild(secretsScript);
+        })();
+    </script>
 </body>
 </html>
