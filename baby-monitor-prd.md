@@ -1,49 +1,70 @@
-PRD: KGBaby v0.1 (Audio Monitor)
-Objective: A browser-based audio monitor that allows one device (Child) to stream audio to another (Parent) with low latency.
+PRD: KGBaby v0.4 (Audio Monitor)
+Objective: A browser-based audio monitor that allows one device (Child) to stream audio to one or more Parent devices with low latency and robust fallback behavior on restrictive networks.
 
 1. Core Functionality
-The app functions as a peer-to-peer (P2P) bridge, with relay support for restrictive networks. There are two primary modes of operation.
+The app operates as a WebRTC system with direct-path preference and relay fallback.
 
-A. The Child Mode (The "Sender")
-Automatic Start: Once selected, the mic initializes immediately.
-Acoustic Settings: Uses specific WebRTC constraints to optimize for a baby's room:
-echoCancellation: false (Not needed since the child phone isn't playing audio; disabling this improves clarity).
-noiseSuppression: true (To filter out white noise machines or fans).
-autoGainControl: true (Ensures that even a faint whimper is amplified).
-Link Status: A persistent "Recording" indicator (standard in browsers) and an on-screen "Mic Active" status.
-B. The Parent Mode (The "Listener")
-Auto-Play Loophole: Requires a "Start Listening" button click to satisfy browser security policies for audio playback.
-Visual Audio Meter: A CSS-based volume bar that moves even if the parent has their phone volume low. This provides visual confirmation that "the link is alive."
-Always-On Audio: Uses the HTML5 Audio API with a persistent stream.
-2. Technical Milestones
-Phase 1: Signaling & Handshake (PeerJS)
-Room ID Logic: Users enter a "Room Name" (e.g., AB802). Both devices use this string to find each other on the PeerJS cloud server.
-Role Assignment: The URL will append ?role=child or ?role=parent.
-Phase 2: Power Management (The "Deep Sleep" Fix)
-Screen Wake Lock API: Implements navigator.wakeLock to prevent the "Child" phone from turning off the screen and killing the mic process.
-Battery Optimization: Includes a "Dim Screen" overlay (a black div with 90% opacity) to save battery on OLED screens while keeping the browser active.
-Phase 3: Reliability & Reconnection
-Connection Heartbeat: If the Wi-Fi blips, the Parent device detects the on('close') event and attempts to auto-reconnect every 5 seconds.
-Connection Status: A simple Red/Green dot indicating if the P2P link is active.
-3. Quality & Reliability
-Phase 1: Automated Relay Diagnostics
-The app automatically identifies the ICE connection path (Direct vs Relay).
-The Parent Unit displays the current connection mode in real-time, providing transparency about data usage and privacy.
-Phase 2: Error Recovery
-Interactive recovery controls ("Retry Mic" and "Reset Connection") allow users to recover from transient failures without a full page reload.
-Comprehensive logging of the signal path and media stats provides immediate feedback on connection health.
-Phase 3: Battery Optimization
-Automatic throttling of high-CPU UI tasks (like the audio visualizer) when the screen is dimmed to maximize overnight battery life.
+A. Child Mode (Sender)
+- Automatic start: after role selection and connect, the app requests mic access and prepares transmit chain.
+- Acoustic settings:
+  - `echoCancellation: false`
+  - `noiseSuppression: true`
+  - `autoGainControl: true`
+- Activity model:
+  - rolling noise floor
+  - elevated event detection
+  - infant states: `zzz`, `settled`, `stirring`, `needsCare`
+- Control channel: receives parent commands (for example, dim-screen sync).
 
-4. UI/UX Design (Mobile First)
-The interface should be high-contrast and easy to use in a dark room.
-Dark Mode Default: Deep blacks and soft greens to avoid "blue light" wakefulness.
-Big Buttons: Touch targets for "Start" and "Stop" must be large.
-Volume Visualizer: A simple vertical bar that turns orange/red when the baby's room exceeds a certain decibel threshold.
-5. Technical Constraints
-Security: Must be hosted on HTTPS (GitHub Pages is fine).
-Network: Best performance on the same Wi-Fi. If using 5G to Wi-Fi, PeerJS will automatically try to negotiate a STUN connection.
-Browser: Optimized for iOS Safari and Android Chrome.
-6. Success Metrics
-Latency: Audio delay should be <100ms.
-Stability: Must maintain a continuous stream for ≥8 hours (overnight).
+B. Parent Mode (Listener)
+- Start listening action: required to satisfy browser autoplay policy.
+- Live monitor:
+  - receives remote audio stream
+  - visual meter for confidence that stream is active
+- Comfort controls:
+  - white-noise control
+  - dim child screen
+  - shush recording/toggle
+
+2. Signaling and Session Model
+- PeerJS is used for signaling and peer session setup.
+- User flow uses role buttons + join code entry, not URL role query params.
+- Session IDs are derived from normalized join codes.
+- Multiple parents can join a single child session.
+
+3. Connectivity Strategy
+- Preferred path: direct ICE candidates (`host` / `srflx`) for best latency/privacy.
+- Fallback path: TURN relay candidates (`relay`) when direct path fails.
+- Parent UI exposes current mode (`Direct` vs `Relay`) from ICE candidate type.
+- TURN servers are configured at runtime via `window.TURN_CONFIG` (for example, in `secrets.js`).
+
+4. Reliability and Recovery
+- Parent retry loop uses progressive backoff (starting at 3s up to 30s).
+- Data channel has open-timeout handling and autonomous reconnect attempts.
+- Heartbeat watchdog is media-aware:
+  - suppresses false alarms when media remains healthy
+  - triggers alarm when heartbeat is stale and media is unhealthy.
+- Recovery controls:
+  - `Retry Mic` (child)
+  - `Reset Connection` (parent)
+
+5. Power and Session Longevity
+- Wake Lock API is used when available.
+- Hidden looping video fallback helps keep session active on mobile browsers.
+- Dim overlay is available to reduce light disturbance.
+
+6. Security and Privacy Constraints
+- App must be hosted on HTTPS.
+- Direct mode is preferred for privacy and latency.
+- TURN relay is a reliability fallback and not the privacy-preferred mode because traffic transits third-party relay infrastructure.
+
+7. Browser and Network Constraints
+- Optimized for iOS Safari and Android Chrome.
+- Works best on same-network/home mesh setups in direct mode.
+- Guest Wi-Fi, carrier NAT, or restrictive firewalls may require TURN relay.
+
+8. Success Criteria
+- Connection success rate improves on restrictive networks with TURN fallback.
+- Parent can maintain monitor session across transient data-channel failures.
+- False disconnect alarms are reduced by media-aware watchdog gating.
+- End-to-end usability remains simple for non-technical users (role select, join code, connect, listen).

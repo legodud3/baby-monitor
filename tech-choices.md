@@ -1,12 +1,13 @@
-# Tech Choices and Design Rationale (KGBaby v0.2)
+# Tech Choices and Design Rationale (KGBaby v0.4)
 
 This document explains the technical and UX decisions in the current release.
 
 ## Core Architecture
 
-- **WebRTC via PeerJS (P2P)**
-  - Why: Keeps audio path direct for low latency whenever possible.
-  - Tradeoff: Some networks still require TURN fallback.
+- **WebRTC via PeerJS (Direct-First + TURN Fallback)**
+  - Why: Direct ICE path gives lowest latency and strongest privacy posture on friendly networks.
+  - Tradeoff: Restrictive NAT/guest/cellular networks often require TURN relay for reliability.
+  - Operational nuance: Relay mode is fallback, not preference.
 
 - **Native ES Modules (No-Build)**
   - Why: Maintains "no-build" portability while resolving monolithic file complexity.
@@ -23,7 +24,7 @@ This document explains the technical and UX decisions in the current release.
   - Why: Avoids missing quieter sounds that gate-based streaming can drop.
   - Tradeoff: Higher continuous CPU/network usage.
 
-- **Room-optimized mic constraints** (`echoCancellation`, `noiseSuppression`, `autoGainControl`)
+- **Room-optimized mic constraints** (`echoCancellation: false`, `noiseSuppression: true`, `autoGainControl: true`)
   - Why: Better real-room pickup quality for nursery environments.
   - Tradeoff: Slight coloration versus raw microphone fidelity.
 
@@ -61,6 +62,14 @@ This document explains the technical and UX decisions in the current release.
 - **Auto reconnect flow**
   - Why: Recovers from transient Wi-Fi drops without manual full reset.
 
+- **Media-aware alarm watchdog**
+  - Why: Avoids false disconnect alarms when media is still healthy but heartbeat/data channel is delayed.
+  - Tradeoff: Adds more state tracking and telemetry complexity.
+
+- **Data-channel open timeout and recovery**
+  - Why: Recreate stalled control channels without tearing down active media.
+  - Tradeoff: More reconnection logic and diagnostics.
+
 ## UI and Interaction
 
 - **State-forward redesign**
@@ -73,5 +82,5 @@ This document explains the technical and UX decisions in the current release.
 ## Known Constraints
 
 - **Mobile background suspension** can still pause mic/WebRTC despite wake-lock attempts.
-- **TURN infrastructure** is optional and external to this repository.
+- **TURN infrastructure** is external to this repository and introduces relay-path privacy tradeoffs versus direct mode.
 - **State confidence** depends on device mic quality, placement, and ambient noise profile.

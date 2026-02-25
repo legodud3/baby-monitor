@@ -4,7 +4,7 @@ const runtime = typeof window !== 'undefined' ? window : globalThis;
 const runtimeCry = runtime?.CRY_CONFIG || {};
 const runtimeNetwork = runtime?.NETWORK_CONFIG || {};
 const runtimeTurn = runtime?.TURN_CONFIG || null;
-export const APP_BUILD_ID = runtime?.APP_BUILD_ID || '2026-02-22.1';
+export const APP_BUILD_ID = runtime?.APP_BUILD_ID || '2026-02-25.1';
 
 export const CRY_CONFIG = {
     sustainedSeconds: 1.5,

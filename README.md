@@ -1,18 +1,18 @@
-# KGBaby v0.3 - Private Browser Baby Monitor
+# KGBaby v0.4 - Private Browser Baby Monitor
 
-A secure, low-latency audio monitor that runs in the browser using direct WebRTC (PeerJS) connections.
+A secure, low-latency audio monitor that runs in the browser using WebRTC (PeerJS) with direct-path preference and TURN fallback.
 
 ## Features
 
-- **Direct P2P Audio**: Child-to-parent streaming without routing live audio through an app server.
-- **State-First Monitoring**: Parent view shows calm baby-state labels (`😴 Zzz`, `🙂 Settled`, `😣 Stirring`, `🚨 Needs attention`) plus `Last elevated ...` timing.
+- **Direct-First Audio Path**: Child-to-parent audio prefers direct ICE (`host`/`srflx`) and falls back to TURN relay when needed.
+- **State-First Monitoring**: Parent view shows calm baby-state labels (`😴 Zzz`, `🙂 Settled`, `😣 Stirring`, `🚨 Needs attention`).
 - **Redesigned Mobile UI**: Card-based controls, stronger status visibility, and improved readability in low-light rooms.
 - **Parent Controls**: Trigger child white noise, set timer (30/60/infinite), adjust volume, and dim/wake child screen.
 - **Join-Code Pairing**: Pair devices with a non-identifying join code (example: `OTTER-AB12-CD34`).
 - **Multiple Parents**: More than one parent device can join with the same join code.
 - **Fail-Safe Alarm Skeleton**: Parent supports heartbeat watchdog checks with an alarm acknowledgment flow.
 - **Local Persistence**: White-noise and infant-state context are stored per join code in local browser storage.
-- **Reliability Guards**: Auto-reconnect handling, wake-lock support, and debug overlay (`?debug=1`).
+- **Reliability Guards**: Auto-reconnect handling, wake-lock support, build fingerprint logging, data-channel watchdogs, and media-aware alarm gating.
 
 ## Quick Start
 
@@ -33,7 +33,7 @@ A secure, low-latency audio monitor that runs in the browser using direct WebRTC
 
 ## Tuning Activity Detection
 
-Edit `cry-config.js`:
+Inject a runtime override before `main.js` (for example in `index.html`):
 
 ```js
 window.CRY_CONFIG = {
@@ -53,9 +53,9 @@ Notes:
 - `nonCriticalStateMinHoldSeconds` controls how often non-critical states can change.
 - Elevated events feed parent recency text and influence state transitions.
 
-## Optional Network Tuning
+## Network Tuning
 
-Edit `network-config.js` for lower-bandwidth environments:
+Inject a runtime override before `main.js`:
 
 ```js
 window.NETWORK_CONFIG = {
@@ -65,17 +65,27 @@ window.NETWORK_CONFIG = {
 };
 ```
 
-## Optional TURN
+## Connection Path and Privacy
 
-If direct peer connection fails on restrictive networks:
+- **Preferred mode: Direct (`host`/`srflx`)**
+  - Best for privacy and latency.
+  - Works well on many home/mesh/AP-style networks.
+- **Fallback mode: Relay (`relay` via TURN)**
+  - Use when direct connectivity fails (guest Wi-Fi, strict NAT, carrier networks).
+  - Not the preference from a privacy standpoint because media traffic is relayed through external TURN infrastructure.
+  - In this app, TURN is reliability fallback, not first choice.
+
+### TURN Configuration (Fallback)
+
+If direct peer connection fails on restrictive networks, provide TURN servers:
 
 ```html
 <script>
-  window.TURN_CONFIG = {
-    urls: "turn:your.turn.server:3478",
-    username: "user",
-    credential: "pass"
-  };
+window.TURN_CONFIG = {
+  urls: "turn:your.turn.server:3478",
+  username: "user",
+  credential: "pass"
+};
 </script>
 ```
 
@@ -88,6 +98,7 @@ If direct peer connection fails on restrictive networks:
 - **Echo**: Keep parent device out of the nursery.
 - **PeerJS failed to load**: App loads `vendor/peerjs.min.js` first, then falls back to `unpkg.com`. If both fail, check captive portal, VPN, DNS, and firewall.
 - **Build mismatch across devices**: Compare the `Build ...` suffix in the status line on both devices. If different, fully close/reopen tabs and hard refresh.
+- **Connection mode clarity**: Check `Mode:` in parent header (`Direct` preferred, `Relay` fallback).
 
 ## Development
 
@@ -114,7 +125,7 @@ npx serve
 curl -fsSL https://legodud3.github.io/kgbaby/main.js | rg "\\[BUILD\\]"
 
 # Verify the deployed build fingerprint value
-curl -fsSL https://legodud3.github.io/kgbaby/modules/config.js | rg "APP_BUILD_ID|2026-02-22.1"
+curl -fsSL https://legodud3.github.io/kgbaby/modules/config.js | rg "APP_BUILD_ID"
 ```
 
 ### Architecture
